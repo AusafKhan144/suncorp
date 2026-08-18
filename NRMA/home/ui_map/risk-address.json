@@ -1,0 +1,116 @@
+{
+ "url": "https://insurance.nrma.com.au/get-cover/home/3/risk-address?quoteId=QTEN0022478256",
+ "text": "Help Let's get your home insurance quote Your home policy type Home Building Insurance See other home policy types When should we start this policy? 12/ 08/ 2026 Open Calendar What is the address of your home? When options are available, use the arrow keys to navigate the list and press Enter to select. Can't see your address?Enter your address manually Terms and conditions By proceeding, you agree to the NRMA Insurance website Terms of Use (opens in new window) , that you have been provided with the Home Insurance PDS (opens in new window) , and that you'll receive your policy documents via email. The Online Discount (opens in new window) is only available if you agree to these terms. We will collect, use and disclose your details in accordance with our privacy policy. (opens in new window) Search Insurance issued by Insurance Australia Limited, ABN 11 000 016 722, AFSL 227681 trading as NRMA Insurance. Any advice provided is general advice only and does not take into account your individual objectives, financial situation or needs (\"your personal circumstances\"). Before using this advice to decide whether to purchase a product, you should consider your personal circumstances and the relevant Product Disclosure Statement. The Product Disclosure Statement (opens in new window) , Target Market Determinations (opens in new window) and Key Facts Sheet (opens in new window) are available from our website. *National Roads and Motorists' Association Limited, ABN 77 000 010 506, trading as NRMA, is a separate and independent company from Insurance Australia Limited, ABN 11 000 016 722, trading as NRMA Insurance. \"NRMA\" provides membership, the My NRMA app and other services. Privacy & Security (opens in new window) | Terms of Use (opens in new window) \u00a9 Insurance Australia Limited ABN 11 000 016 722",
+ "controls": [
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "",
+   "value": "",
+   "text": "Help",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "wnds3mj2d7",
+   "name": "",
+   "testid": "policy-type-button",
+   "label": "Your home policy type",
+   "value": "",
+   "text": "See other home policy types",
+   "options": null
+  },
+  {
+   "tag": "span",
+   "type": "",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "Day",
+   "value": "",
+   "text": "12",
+   "options": null
+  },
+  {
+   "tag": "span",
+   "type": "",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "Month",
+   "value": "",
+   "text": "08",
+   "options": null
+  },
+  {
+   "tag": "span",
+   "type": "",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "Year",
+   "value": "",
+   "text": "2026",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "Choose date, selected date is Aug 12, 2026",
+   "value": "",
+   "text": "Open Calendar",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "",
+   "id": "start-date-input",
+   "name": "",
+   "testid": "",
+   "label": "",
+   "value": "12/08/2026",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "text",
+   "id": "",
+   "name": "risk-address-question",
+   "testid": "risk-address-question",
+   "label": "",
+   "value": "",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "",
+   "value": "",
+   "text": "Enter your address manually",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "next-button",
+   "label": "",
+   "value": "",
+   "text": "Search",
+   "options": null
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Generated output
+outputs/
+Logs/
+*.log
+*.zip
+
+# Captured browser/network junk
+*.har
+.har
+page_dump.html
+request_logs.json
+captured_flow.json
+simplified_flow.json
+offer.curl
+results.csv
+/*.png
+
+# Secrets
+webhook.conf
+.env
+
+# Editor
+.vscode/
+
+# Generated chunk splits (see chunkify.py)
+chunks/

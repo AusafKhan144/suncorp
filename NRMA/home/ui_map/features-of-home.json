@@ -1,0 +1,193 @@
+{
+ "url": "https://insurance.nrma.com.au/get-cover/home/3/features-of-home?quoteId=QTEN0022478256",
+ "text": "Help Quote progress 40% Does your home have any of these features? Inbuilt heating or cooling Yes No Inground pool Yes No Tennis court Yes No Solar panels Yes No Jetty, wharf, landing or pier Yes No How would you describe your home's fittings and fixtures? Things like benchtops, taps, cupboards, lighting and flooring. Standard Standard design and basic fittings and fixtures. Most homes fit into this category. Quality Architectural design, European appliances, above average fittings and fixtures. Prestige Complex architectural design, high-end appliances and fittings and fixtures. More about fittings and fixtures Next Back Insurance issued by Insurance Australia Limited, ABN 11 000 016 722, AFSL 227681 trading as NRMA Insurance. Any advice provided is general advice only and does not take into account your individual objectives, financial situation or needs (\"your personal circumstances\"). Before using this advice to decide whether to purchase a product, you should consider your personal circumstances and the relevant Product Disclosure Statement. The Product Disclosure Statement (opens in new window) , Target Market Determinations (opens in new window) and Key Facts Sheet (opens in new window) are available from our website. *National Roads and Motorists' Association Limited, ABN 77 000 010 506, trading as NRMA, is a separate and independent company from Insurance Australia Limited, ABN 11 000 016 722, trading as NRMA Insurance. \"NRMA\" provides membership, the My NRMA app and other services. Privacy & Security (opens in new window) | Terms of Use (opens in new window) \u00a9 Insurance Australia Limited ABN 11 000 016 722",
+ "controls": [
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "",
+   "value": "",
+   "text": "Help",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "7kq2ovjkwc0",
+   "name": "BuiltInHeatingOrCooling",
+   "testid": "",
+   "label": "Yes",
+   "value": "true",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "7kq2ovjkwc1",
+   "name": "BuiltInHeatingOrCooling",
+   "testid": "",
+   "label": "No",
+   "value": "false",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "giba4l5ec50",
+   "name": "InGroundPool",
+   "testid": "",
+   "label": "Yes",
+   "value": "true",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "giba4l5ec51",
+   "name": "InGroundPool",
+   "testid": "",
+   "label": "No",
+   "value": "false",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "h9nk5eoey10",
+   "name": "TennisCourt",
+   "testid": "",
+   "label": "Yes",
+   "value": "true",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "h9nk5eoey11",
+   "name": "TennisCourt",
+   "testid": "",
+   "label": "No",
+   "value": "false",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "5vjh6zh1460",
+   "name": "SolarPanels",
+   "testid": "",
+   "label": "Yes",
+   "value": "true",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "5vjh6zh1461",
+   "name": "SolarPanels",
+   "testid": "",
+   "label": "No",
+   "value": "false",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "8rypztp4c70",
+   "name": "jetty-question-input",
+   "testid": "",
+   "label": "Yes",
+   "value": "true",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "8rypztp4c71",
+   "name": "jetty-question-input",
+   "testid": "",
+   "label": "No",
+   "value": "false",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "home-fixtures-question-input0",
+   "name": "QualityOfFixtures",
+   "testid": "",
+   "label": "Standard\n\nStandard design and basic fittings and fixtures. Most homes fit into t",
+   "value": "STANDARD",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "home-fixtures-question-input1",
+   "name": "QualityOfFixtures",
+   "testid": "",
+   "label": "Quality\n\nArchitectural design, European appliances, above average fittings and f",
+   "value": "QUALITY",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "home-fixtures-question-input2",
+   "name": "QualityOfFixtures",
+   "testid": "",
+   "label": "Prestige\n\nComplex architectural design, high-end appliances and fittings and fix",
+   "value": "PRESTIGE",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "features-of-home-button",
+   "label": "",
+   "value": "",
+   "text": "More about fittings and fixtures",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "next-button",
+   "label": "",
+   "value": "",
+   "text": "Next",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "back-button",
+   "label": "",
+   "value": "",
+   "text": "Back",
+   "options": null
+  }
+ ]
+}

@@ -1,0 +1,680 @@
+{
+  "41800.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|contents|low|target=76000|min=77231|max=231693",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-10 17:12:47"
+  },
+  "20431.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=770000|min=831640|max=1559325",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 03:52:45"
+  },
+  "20073.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|contents|low|target=60000|min=77901|max=233702",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 05:13:58"
+  },
+  "20603.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "3",
+      "LargeBedrooms": "2",
+      "Bathrooms": "3",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1507000|min=772236|max=1447943",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 06:16:27"
+  },
+  "20561.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=633000|min=643586|max=1206723",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 06:56:01"
+  },
+  "20323.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "2",
+      "LargeBedrooms": "2",
+      "Bathrooms": "2",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1145000|min=561430|max=1052681",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 07:28:54"
+  },
+  "20552.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|contents|low|target=92000|min=92652|max=277956",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 07:56:38"
+  },
+  "20581.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=154000|min=374014|max=701276",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 08:21:57"
+  },
+  "20621.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "2",
+      "LargeBedrooms": "2",
+      "Bathrooms": "3",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1186000|min=607121|max=1138352",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 08:25:35"
+  },
+  "20771.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=598000|min=613146|max=1149650",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 08:30:18"
+  },
+  "20482.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=468000|min=637498|max=1195310",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 08:39:07"
+  },
+  "20318.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "0",
+      "MediumBedrooms": "4",
+      "LargeBedrooms": "1",
+      "Bathrooms": "3",
+      "LivingSpaces": "2",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1147000|min=604067|max=1132626",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 08:50:10"
+  },
+  "20155.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=633000|min=633990|max=1188731",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 08:59:37"
+  },
+  "20286.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=526000|min=592669|max=1111254",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 09:05:32"
+  },
+  "20702.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|contents|low|target=52000|min=67875|max=203625",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 09:46:25"
+  },
+  "20361.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "4",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "2",
+      "Bathrooms": "2",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1370000|min=499573|max=936699",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 10:05:26"
+  },
+  "20119.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "3",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "1",
+      "Bathrooms": "3",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=851000|min=388910|max=729207",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 10:20:07"
+  },
+  "20259.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "3",
+      "LargeBedrooms": "2",
+      "Bathrooms": "3",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1280000|min=679111|max=1273334",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 10:42:48"
+  },
+  "20723.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=351000|min=389806|max=730887",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 11:15:20"
+  },
+  "20451.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=380000|min=430621|max=807414",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 11:29:57"
+  },
+  "20586.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "3",
+      "LargeBedrooms": "3",
+      "Bathrooms": "5",
+      "LivingSpaces": "2",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|contents|high|target=298000|min=94511|max=283532",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 11:37:41"
+  },
+  "20408.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=572000|min=584658|max=1096235",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 11:41:46"
+  },
+  "20594.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "2",
+      "LargeBedrooms": "2",
+      "Bathrooms": "4",
+      "LivingSpaces": "1",
+      "DiningRooms": "1"
+    },
+    "outdoor_overrides": null,
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|high|target=1113000|min=580323|max=1088106",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 11:45:44"
+  },
+  "20754.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|contents|low|target=51000|min=60809|max=182427",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:19:07"
+  },
+  "80269.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=709000|min=1169870|max=2193507",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:25:44"
+  },
+  "80357.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=523000|min=615908|max=1154828",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:29:35"
+  },
+  "80186.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=717000|min=975177|max=1828457",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:32:59"
+  },
+  "80291.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=733000|min=935344|max=1753770",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:35:43"
+  },
+  "80163.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=404000|min=813632|max=1525560",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:38:35"
+  },
+  "80141.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=358000|min=544946|max=1021775",
+    "retry1_error": "",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:51:01"
+  },
+  "80381.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=473000|min=859033|max=1610687",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 13:59:17"
+  },
+  "80004.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=849000|min=968294|max=1815551",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 14:01:53"
+  },
+  "80260.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=562000|min=982874|max=1842890",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 14:15:16"
+  },
+  "80121.2025": {
+    "phase": 2,
+    "room_overrides": {
+      "SmallBedrooms": "1",
+      "MediumBedrooms": "0",
+      "LargeBedrooms": "0",
+      "Bathrooms": "1",
+      "LivingSpaces": "1",
+      "DiningRooms": "0"
+    },
+    "outdoor_overrides": {
+      "ParkingSpacesCarport": "0",
+      "ParkingSpacesGarage": "0",
+      "InGroundPool": false
+    },
+    "occupant_overrides": null,
+    "original_error": "SumInsuredOutOfRange|building|low|target=607000|min=1203158|max=2255922",
+    "retry1_error": "HTTPError: 502 Server Error: None for url: None",
+    "retry2_error": "",
+    "timestamp": "2026-06-11 14:22:13"
+  }
+}

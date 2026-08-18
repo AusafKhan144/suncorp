@@ -1,0 +1,260 @@
+{
+ "url": "https://insurance.nrma.com.au/get-cover/home/3/construction-of-home?quoteId=QTEN0022478256",
+ "text": "Help Quote progress 35% Tell us about the construction of your home Estimated Build Year and Related Questions What year was your home built? How to work out the year built How many storeys does your home have? 1 2 3 4+ What counts as a storey What material is your roof made of? if your roof is made from more than one material, choose the material used the most. More about roof material What are your external walls made of? If your walls are made from more than one material, choose the material used the most. More about external walls material How would you describe the slope your home is built on? Flat or gentle Up to 10 degrees Moderate Around 10 to 20 degrees Severe Over 20 degrees How to work out the slope Is your home and any other building on the property raised above the ground by at least 1.2m? Yes No More about the construction of your home Next Back Insurance issued by Insurance Australia Limited, ABN 11 000 016 722, AFSL 227681 trading as NRMA Insurance. Any advice provided is general advice only and does not take into account your individual objectives, financial situation or needs (\"your personal circumstances\"). Before using this advice to decide whether to purchase a product, you should consider your personal circumstances and the relevant Product Disclosure Statement. The Product Disclosure Statement (opens in new window) , Target Market Determinations (opens in new window) and Key Facts Sheet (opens in new window) are available from our website. *National Roads and Motorists' Association Limited, ABN 77 000 010 506, trading as NRMA, is a separate and independent company from Insurance Australia Limited, ABN 11 000 016 722, trading as NRMA Insurance. \"NRMA\" provides membership, the My NRMA app and other services. Privacy & Security (opens in new window) | Terms of Use (opens in new window) \u00a9 Insurance Australia Limited ABN 11 000 016 722",
+ "controls": [
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "",
+   "label": "",
+   "value": "",
+   "text": "Help",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "",
+   "id": "home-year-built-question-year",
+   "name": "YearConstructed",
+   "testid": "home-year-built-question-year-input",
+   "label": "(Estimated Build Year and Related Questions)",
+   "value": "",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "home-year-built-question-button",
+   "label": "(Estimated Build Year and Related Questions)",
+   "value": "",
+   "text": "How to work out the year built",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "how-many-storeys-question-input0",
+   "name": "Storeys",
+   "testid": "",
+   "label": "1",
+   "value": "1",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "how-many-storeys-question-input1",
+   "name": "Storeys",
+   "testid": "",
+   "label": "2",
+   "value": "2",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "how-many-storeys-question-input2",
+   "name": "Storeys",
+   "testid": "",
+   "label": "3",
+   "value": "3",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "how-many-storeys-question-input3",
+   "name": "Storeys",
+   "testid": "",
+   "label": "4+",
+   "value": "4PLUS",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "how-many-storeys-question-button",
+   "label": "",
+   "value": "",
+   "text": "What counts as a storey",
+   "options": null
+  },
+  {
+   "tag": "select",
+   "type": "",
+   "id": "wyoi3xviph",
+   "name": "roof-material-question",
+   "testid": "roof-material-question",
+   "label": "What material is your roof made of?",
+   "value": "",
+   "text": "",
+   "options": [
+    "",
+    "CONCRETE_TILE",
+    "FIBRECEMENT_COVERING",
+    "METAL_COVERING",
+    "SLATE",
+    "TERRACOTTA",
+    "TIMBER_SHINGLES",
+    "OTHER"
+   ]
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "roof-material-question-button",
+   "label": "",
+   "value": "",
+   "text": "More about roof material",
+   "options": null
+  },
+  {
+   "tag": "select",
+   "type": "",
+   "id": "n4ypaids6m",
+   "name": "external-wall-material-question",
+   "testid": "external-wall-material-question",
+   "label": "What are your external walls made of?",
+   "value": "",
+   "text": "",
+   "options": [
+    "",
+    "AAC_PANEL",
+    "BLOCKWORK",
+    "BRICK_VENEER",
+    "DOUBLE_BRICK",
+    "PANEL_WALL_SYSTEM",
+    "RENDERED_MASONRY",
+    "SHEET_CLADDING",
+    "STONEWORK",
+    "STONEWORK_VENEER",
+    "WEATHERBOARD_TIMBER",
+    "WEATHERBOARD_ARTIFICIAL",
+    "OTHER"
+   ]
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "external-wall-material-question-button",
+   "label": "",
+   "value": "",
+   "text": "More about external walls material",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "home-slope-question-input0",
+   "name": "LandSlope",
+   "testid": "",
+   "label": "Flat or gentle\n\nUp to 10 degrees",
+   "value": "FLAT_GENTLE",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "home-slope-question-input1",
+   "name": "LandSlope",
+   "testid": "",
+   "label": "Moderate\n\nAround 10 to 20 degrees",
+   "value": "MODERATE",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "home-slope-question-input2",
+   "name": "LandSlope",
+   "testid": "",
+   "label": "Severe\n\nOver 20 degrees",
+   "value": "SEVERE",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "home-slope-question-button",
+   "label": "",
+   "value": "",
+   "text": "How to work out the slope",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "dz9u72x6ii0",
+   "name": "how-far-above-ground-level-question-input",
+   "testid": "",
+   "label": "Yes",
+   "value": "true",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "input",
+   "type": "radio",
+   "id": "dz9u72x6ii1",
+   "name": "how-far-above-ground-level-question-input",
+   "testid": "",
+   "label": "No",
+   "value": "false",
+   "text": "",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "construction-of-home-button",
+   "label": "",
+   "value": "",
+   "text": "More about the construction of your home",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "next-button",
+   "label": "",
+   "value": "",
+   "text": "Next",
+   "options": null
+  },
+  {
+   "tag": "button",
+   "type": "button",
+   "id": "",
+   "name": "",
+   "testid": "back-button",
+   "label": "",
+   "value": "",
+   "text": "Back",
+   "options": null
+  }
+ ]
+}
