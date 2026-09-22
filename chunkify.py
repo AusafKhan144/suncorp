@@ -5,33 +5,28 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import period  # noqa: E402
+
 # ===== CONFIGURATION =====
 
 class ChunkConfig:
     """Configuration for synchronized chunk generation"""
     
     # Master input files (one per product type)
+    # Whatever Youi home CSVs this period actually dropped. A quarterly run that
+    # also ships toggle/combined files gets them by dropping them in — the names
+    # are read, not hardcoded, so nothing here needs editing per period.
     MASTER_FILES = {
-        "motor": "/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/20260817/data/Motor_YOUI_monthly_202608.csv",
-        "buildings_main": "/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/20260817/data/Buildings_YOUI_monthly_202608_main.csv",
-        "buildings_toggle": "/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/202608/data/Buildings_YOUI_quarterly_202608_toggle.csv",
-        "combined": "/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/202608/data/Combined_YOUI_quarterly_202608.csv",
-        "contents_main": "/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/20260817/data/Contents_YOUI_monthly_202608_main.csv",
-        "contents_toggle": "/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/202608/data/Contents_YOUI_quarterly_202608_toggle.csv",
+        f"{product.lower()}_main": period.input_csv("Youi", product)
+        for product in ("Buildings", "Contents")
+        if period.input_csv("Youi", product)
     }
     
     # Groups of files that should have matching sample codes in chunk 1
-    SYNCHRONIZED_GROUPS = [
-        {
-            "name": "home_insurance",
-            "files": [
-                "buildings_toggle",
-                "combined",
-                "contents_toggle"
-            ],
-            "sample_column": "SAMPLE_NUMBER"
-        }
-    ]
+    # No synchronized group this run — the toggle/combined files it referenced
+    # are not part of a monthly home run. Restore when a quarterly run needs it.
+    SYNCHRONIZED_GROUPS = []
     
     # Number of chunks to create
     NUM_CHUNKS = 10

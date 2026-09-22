@@ -16,37 +16,26 @@ class CrawlerConfig(NamedTuple):
     log_dir: Path
 
 
-# Define all crawler configurations
+# Built from the drop, not hand-edited: period.py resolves the period and the
+# real filename (cadence word included) for each product, and runner.py is
+# handed that same stem. A product with no input CSV this period is simply not
+# in the list, so a home-only month needs no commenting-out.
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import period  # noqa: E402
+
 CRAWLER_CONFIGS = [
-    # CrawlerConfig(
-    #     crawler_type="contents_toggle",
-    #     filename="Contents_YOUI_quarterly_202608_toggle",
-    #     log_dir=Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/Logs/202608/contents_toggle_log/")
-    # ),
-    # CrawlerConfig(
-    #     crawler_type="buildings_toggle",
-    #     filename="Buildings_YOUI_quarterly_202608_toggle",
-    #     log_dir=Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/Logs/202608/buildings_toggle_log/")
-    # ),
-    # CrawlerConfig(
-    #     crawler_type="combined",
-    #     filename="Combined_YOUI_quarterly_202608",
-    #     log_dir=Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/Logs/202608/combined_log/")
-    # ),
     CrawlerConfig(
-        crawler_type="buildings",
-        filename="Buildings_YOUI_monthly_202608_main",
-        log_dir=Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/Logs/20260817/buildings_log/")
-    ),
-    CrawlerConfig(
-        crawler_type="contents",
-        filename="Contents_YOUI_monthly_202608_main",
-        log_dir=Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/Logs/20260817/contents_log/")
-    ),
+        crawler_type=crawler,
+        filename=period.stem("Youi", product),
+        log_dir=HERE / "Youi" / "Logs" / period.PERIOD / f"{crawler}_log",
+    )
+    for crawler, product in (("buildings", "Buildings"), ("contents", "Contents"))
+    if period.stem("Youi", product)
 ]
 
 # Path to the runner script
-RUNNER_SCRIPT = "/home/wmc/WMC/DataManipulation/Suncorp/Youi/home/runner.py"
+RUNNER_SCRIPT = str(HERE / "Youi" / "home" / "runner.py")
 
 # Chunk configuration
 CHUNK_START = 1
@@ -251,7 +240,10 @@ def run_single_chunk(
 
             process = subprocess.run(
                 [
-                    "python3",
+                    # Not "python3": under cron's minimal PATH that resolves to
+                    # /usr/bin/python3, which has no playwright, and all 20
+                    # runners die on import. Inherit whatever launched us.
+                    sys.executable,
                     RUNNER_SCRIPT,
                     config.crawler_type,
                     str(chunk_number),

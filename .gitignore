@@ -28,3 +28,13 @@ webhook.conf
 
 # Generated chunk splits (see chunkify.py)
 chunks/
+
+# Runtime state — per-machine, never shared
+monitor_state.json
+si_retry_state.json
+.nrma_cooldown*
+ui_map/
+
+# Cleanup staging (see its MANIFEST.txt, then rm -rf)
+_trash_*/
+secrets.conf

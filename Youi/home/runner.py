@@ -679,8 +679,11 @@ async def main(crawler_type: str, chunk_arg: str, filename: str) -> None:
     
     # Setup file paths
     try:
-        base_dir = Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/inputs/20260817")
-        output_dir = Path("/home/wmc/WMC/DataManipulation/Suncorp/Youi/outputs/20260817")
+        # period.py lives at the repo root (Youi/home -> Youi -> repo).
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        import period
+        base_dir = Path(period.data_dir("Youi")).parent
+        output_dir = Path(period.out_dir("Youi"))
         input_file = base_dir / "data" / "chunks" / f"{filename}_chunk_{chunk_arg}.csv"
         output_file = output_dir / f"{filename}.csv"
         

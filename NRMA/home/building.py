@@ -11,6 +11,7 @@ import math
 import os
 import random
 import re
+import sys
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -22,16 +23,30 @@ from dataclasses import dataclass, field
 try:  # package import (python -m NRMA.home.building)
     from .nrma_browser import (
         AkamaiNotValidated,
+        BLOCK_STREAK_LIMIT,
+        cooldown_hours_left,
+        COOLDOWN_FILE,
         cover_start_date,
+        is_bot_block,
         quote_session,
+        secret,
         short_failure_reason,
+        start_cooldown,
+        TERMINAL_REASON_PREFIXES,
     )
 except ImportError:  # direct script run
     from nrma_browser import (
         AkamaiNotValidated,
+        BLOCK_STREAK_LIMIT,
+        cooldown_hours_left,
+        COOLDOWN_FILE,
         cover_start_date,
+        is_bot_block,
         quote_session,
+        secret,
         short_failure_reason,
+        start_cooldown,
+        TERMINAL_REASON_PREFIXES,
     )
 
 # ---------------------------------------------------------------------------
@@ -54,28 +69,26 @@ for _noisy in ("httpx", "httpcore", "hpack", "urllib3"):
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-ZYTE_API_KEY = "d5f27f9a318349a599774d39b68f0552"
+ZYTE_API_KEY = secret("ZYTE_API_KEY")  # secrets.conf — never inline, this repo is public
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 BASE_URL = "https://insurance.nrma.com.au"
 CONNECT_URL = "https://connect.nrma.com.au"  # auth token endpoint
+# Paths come from the repo-root period module so a new run is a data drop, not
+# an edit here: it resolves the period and reads the cadence word out of the
+# dropped filename. Env vars still win, which is how a one-off (a single-sample
+# rerun, a re-opened month) is driven without touching the file.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import period  # noqa: E402
+
 CONCURRENCY = int(os.getenv("CONCURRENCY", "1"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "90"))
-INPUT_MAIN_CSV = os.getenv(
-    "INPUT_MAIN_CSV",
-    "/home/wmc/WMC/DataManipulation/Suncorp/NRMA/inputs/20260811/data/Buildings_NRMA_monthly_202608_main.csv",
-)
-INPUT_TOGGLE_CSV = os.getenv(
-    "INPUT_TOGGLE_CSV",
-    "/home/wmc/WMC/DataManipulation/Suncorp/NRMA/inputs/202608/data/Buildings_NRMA_quarterly_202608_toggle.csv",
-)
-OUTPUT_MAIN_CSV = os.getenv(
-    "OUTPUT_MAIN_CSV",
-    "/home/wmc/WMC/DataManipulation/Suncorp/NRMA/outputs/20260811/Buildings_NRMA_quarterly_202608_main.csv",
-)
-OUTPUT_TOGGLE_CSV = os.getenv(
-    "OUTPUT_TOGGLE_CSV",
-    "/home/wmc/WMC/DataManipulation/Suncorp/NRMA/outputs/202608/Buildings_NRMA_quarterly_202608_toggle.csv",
-)
+INPUT_MAIN_CSV = os.getenv("INPUT_MAIN_CSV") or period.input_csv("NRMA", "Buildings") or ""
+OUTPUT_MAIN_CSV = os.getenv("OUTPUT_MAIN_CSV") or period.output_csv("NRMA", "Buildings") or ""
+# A toggle file only exists in a quarterly drop. Absent means skip the stage —
+# never fall back to another period's file, which is how the 202608 toggle
+# output kept being rewritten by every 202609 resume pass.
+INPUT_TOGGLE_CSV = os.getenv("INPUT_TOGGLE_CSV") or period.input_csv("NRMA", "Buildings", "toggle") or ""
+OUTPUT_TOGGLE_CSV = os.getenv("OUTPUT_TOGGLE_CSV") or period.output_csv("NRMA", "Buildings", "toggle") or ""
 RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "5.0"))
 
@@ -796,10 +809,21 @@ class NRMAClient:
     # Step 2 — Validate entitlements
     # ================================================================
     async def step2_validate_entitlements(self):
-        # await self._get(
-        #     f"{BASE_URL}/domain/identity/api/identity-mfe/validateEntitlements",
-        #     referer=f"{BASE_URL}/get-cover/home",
-        # )
+        """The app's own first API call. Restored 2026-09-09.
+
+        Not needed for the data, which is why it was commented out — but the
+        `.har` capture of a real journey calls it six times, and skipping it made
+        our request sequence start with the quote creation, a shape no real
+        client produces. A 404/401 here says nothing about the property, so a
+        failure must not lose the row.
+        """
+        try:
+            await self._get(
+                f"{BASE_URL}/domain/identity/api/identity-mfe/validateEntitlements",
+                referer=f"{BASE_URL}/get-cover/home",
+            )
+        except Exception as exc:  # noqa: BLE001 — sequence padding, not data
+            log.debug("[%s] Step2 entitlements: %s", self.session_id[:8], exc)
         log.debug("[%s] Step2 done", self.session_id[:8])
 
     # ================================================================
@@ -2346,12 +2370,29 @@ RATE_LIMIT_BACKOFF = (
 # Desynchronise worker starts so concurrent browsers don't all create a quote
 # in the same second, which is what trips the per-IP limit in the first place.
 START_JITTER_SECONDS = float(os.getenv("START_JITTER_SECONDS", "20"))
+# Seconds to wait before each profile. See the throttle note in worker().
+PROFILE_DELAY = float(os.getenv("NRMA_PROFILE_DELAY", "0"))
 
-_RATE_LIMIT_MARKERS = ("→ 429", "DynaCop")
+# Refusals that need *time* to clear rather than just a fresh exit IP. 429 and
+# DynaCop are an explicit throttle; a 403 bot block earns the same wait.
+#
+# Making the 403 wait conditional on `_block_streak` looked obviously right — a
+# lone 403 clears on retry, so why pay 30-75s? — and measuring it settled the
+# argument the other way. Back-to-back 20-min samples, same night, same code
+# otherwise:
+#
+#   always wait   33 launches -> 12 rows   36 rows/h   2.75 launches/row
+#   wait if 3+    43 launches -> 10 rows   30 rows/h   4.30 launches/row
+#
+# The fast hop does not clear a 403: a fresh IP 2s later gets refused again,
+# while ~50s of decay actually helps. So the conditional version spent more
+# requests to collect fewer rows. Reverted 2026-09-10 — do not re-derive it from
+# first principles, the measurement is in Decisions.md.
+_RATE_LIMIT_MARKERS = ("→ 429", "DynaCop", "→ 403", "Access Denied")
 
 
 def _is_rate_limited(result: QuoteResult) -> bool:
-    """True for a throttle (429/DynaCop) rather than an outright ban."""
+    """True when the refusal needs time to decay, not just a new IP."""
     reason = result.failure_reason or ""
     return any(m in reason for m in _RATE_LIMIT_MARKERS)
 
@@ -2412,6 +2453,48 @@ async def _run_one_session(profile: Profile, mode: str) -> QuoteResult:
         return result
 
 
+# Consecutive profiles lost to an Akamai 403.
+_block_streak = 0
+_halt = asyncio.Event()
+
+
+def _note_outcome(result: QuoteResult) -> None:
+    """Track consecutive Akamai 403s; halt the run once they are a wall.
+
+    Three-way on purpose, and the third way is the whole point. A 403 counts up.
+    Only a *real answer* counts down — a price, or a terminal reason about the
+    property — because only that proves the wall is down. A dropped residential
+    exit (NS_ERROR_*, NetworkError, a bootstrap that never validated) is
+    evidence of neither and must leave the streak untouched.
+
+    Resetting on those is what stopped this breaker firing when it first ran
+    (2026-09-09 20:08): 20 of 24 give-ups were the 403, but the 4 flaky exits
+    scattered among them kept the counter under the limit indefinitely, so a
+    total block swept on exactly as before.
+    """
+    global _block_streak
+    reason = result.failure_reason or ""
+    if is_bot_block(reason):
+        _block_streak += 1
+    elif not reason or reason.startswith(TERMINAL_REASON_PREFIXES):
+        _block_streak = 0  # a quote got through, or the property was answered
+        return
+    else:
+        return  # transport noise — says nothing about the block either way
+    if _block_streak >= BLOCK_STREAK_LIMIT and not _halt.is_set():
+        hours = start_cooldown()
+        _halt.set()
+        log.error(
+            "⛔ %d profiles bot-blocked with no quote getting through in "
+            "between — halting this run and backing off %.0fmin. Nothing is "
+            "lost: every one of them is still pending for the next pass. "
+            "Delete %s to resume sooner.",
+            _block_streak,
+            hours * 60,
+            COOLDOWN_FILE,
+        )
+
+
 async def worker(
     profile: Profile,
     writer: CSVWriter,
@@ -2420,10 +2503,27 @@ async def worker(
     progress: dict,
 ):
     async with sem:
+        # The breaker tripped (here or in the sibling scraper) — the rest of the
+        # sweep would only rediscover the same block. No row written, so the next
+        # resume pass still owns these profiles.
+        if _halt.is_set() or cooldown_hours_left():
+            return
+
         # Stagger starts so N browsers don't all POST /home/quote in the same
-        # second — DynaCop rate-limits quote creation per true-client-ip.
-        if START_JITTER_SECONDS:
+        # second — DynaCop rate-limits quote creation per true-client-ip. At
+        # CONCURRENCY=1 the semaphore already serialises us, so there is nothing
+        # to desynchronise and the sleep is just ~10s of dead time per profile.
+        if CONCURRENCY > 1 and START_JITTER_SECONDS:
             await asyncio.sleep(random.uniform(0, START_JITTER_SECONDS))
+
+        # Deliberate serial throttle, distinct from the jitter above. On a
+        # single egress IP (NRMA_PROXY=0) DynaCop's quote-creation bucket is
+        # the binding constraint, not Akamai: measured 2026-09-11, 23 launches
+        # in 25 min from one address returned 41x 429 and zero rows. Pacing
+        # trades launches for rows and is the only lever that helps there.
+        # Pointless when every quote gets its own exit IP, so it defaults off.
+        if PROFILE_DELAY:
+            await asyncio.sleep(PROFILE_DELAY)
 
         # One validated browser session per profile — Akamai flags the exit IP
         # after roughly one completed quote, so sessions are never reused. A ban
@@ -2449,7 +2549,8 @@ async def worker(
                     result.failure_reason[:100],
                 )
                 await asyncio.sleep(delay)
-        if _should_retry_on_new_session(result):
+        refused = _should_retry_on_new_session(result)
+        if refused:
             log.error(
                 "❌ profile=%s gave up after %d attempts — left for the next "
                 "resume pass | %s",
@@ -2457,6 +2558,7 @@ async def worker(
                 BAN_RETRY_ATTEMPTS,
                 result.failure_reason[:120],
             )
+        _note_outcome(result)
         await writer.write(
             to_main_row(result) if mode == "main" else to_toggle_row(result)
         )
@@ -2472,6 +2574,27 @@ async def worker(
 
 async def main():
     log.info("=== NRMA Scraper | CONCURRENCY=%d ===", CONCURRENCY)
+
+    # An Akamai block is account-wide and only clears with idle time, so a run
+    # started during the cooldown would just re-burn it. Exiting here is also
+    # what makes the breaker stick against the 2-hourly cron relaunch.
+    resting = cooldown_hours_left()
+    if resting:
+        log.error(
+            "⛔ account resting after a bot-block streak — %.1fh left. "
+            "Delete %s to override.",
+            resting,
+            COOLDOWN_FILE,
+        )
+        return
+
+    if not INPUT_MAIN_CSV:
+        log.error(
+            "no Buildings input for period %s (%s) — drop the CSV into "
+            "%s and check with `python period.py`",
+            period.PERIOD or "?", period.PERIOD_SOURCE, period.data_dir("NRMA"),
+        )
+        return
 
     sem = asyncio.Semaphore(CONCURRENCY)
 
