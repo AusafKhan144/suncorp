@@ -127,10 +127,18 @@ def signature(scan: dict) -> str:
 class MotorsJourney:
     """Drives one motor quote through the real UI on an already-bootstrapped page."""
 
-    def __init__(self, page, answers: dict):
+    def __init__(self, page, answers: dict, vehicle: dict | None = None):
         self.page = page
+        # Vehicle attribute signals for the find-your-car dropdowns, which are
+        # dynamic and cannot be driven from a single input column.
+        self.vehicle = vehicle or {}
         self.answers = answers          # control-id substring -> value
         self.history: list[str] = []
+        # Requested-but-unavailable options. A mapped control whose value matches
+        # no option is not a missing mapping and not an error — it is a
+        # vocabulary mismatch, and it needs surfacing rather than silently
+        # leaving the question unanswered.
+        self.match_failures: list[dict] = []
 
     # ── primitives ────────────────────────────────────────────────────
 
@@ -155,6 +163,7 @@ class MotorsJourney:
         click and still said "Please make a selection". So the result is read
         back, and harder methods are tried until the input is really checked.
         """
+        self.dismiss_overlay()
         checked = lambda: self.page.evaluate(
             "id => { const e = document.getElementById(id); return !!(e && e.checked); }",
             control_id)
@@ -229,7 +238,7 @@ class MotorsJourney:
             option_id,
         )
 
-    def _pick_option(self, wanted: str) -> str | None:
+    def _pick_option(self, wanted: str, control_id: str = "") -> str | None:
         """Exact match, then case-insensitive, then containment, then prefix."""
         opts = self._mat_options()
         if not opts:
@@ -241,8 +250,13 @@ class MotorsJourney:
             # Variant/type options read "GX - 5 dr - Hatchback - FWD"; compare the
             # leading segment so "GX" cannot be satisfied by "GXL".
             lambda t: t.split(" - ")[0].strip().upper() == w,
-            lambda t: w and w in t.upper(),
-            lambda t: w and t.upper().startswith(w[:6]),
+            # Normalised comparison: the input says "GARAGE - PRIVATE AND LOCKED"
+            # and the UI says "In A Garage - Private And Locked".
+            lambda t: w and _norm_option(t) == _norm_option(w),
+            lambda t: w and _norm_option(w) in _norm_option(t),
+            # A 6-char prefix rule used to live here. It silently matched
+            # "GARAGE - PRIVATE AND LOCKED" to "Under A Carport", i.e. answered a
+            # pricing question wrongly rather than reporting it. Refusing is safer.
         ):
             hit = next((o for o in opts if pred(o["text"])), None)
             if hit:
@@ -250,6 +264,8 @@ class MotorsJourney:
                 self.page.wait_for_timeout(1200)
                 self.dismiss_overlay()
                 return hit["text"]
+        self.match_failures.append({"control": control_id, "wanted": wanted,
+                                    "options": [o["text"] for o in opts]})
         log.warning("│  no option matching %r among %s", wanted,
                     [o["text"] for o in opts][:12])
         return None
@@ -267,10 +283,16 @@ class MotorsJourney:
                 "() => !!document.querySelector('.cdk-overlay-backdrop-showing')")
             if not present:
                 return
+            # Clicking the backdrop is how Material closes a panel; Escape alone
+            # left it in place often enough to block the next field's click.
             try:
-                self.page.keyboard.press("Escape")
+                self.page.locator(".cdk-overlay-backdrop-showing").first.click(
+                    force=True, timeout=2000)
             except Exception:
-                pass
+                try:
+                    self.page.keyboard.press("Escape")
+                except Exception:
+                    pass
             self.page.wait_for_timeout(400)
             waited += 400
 
@@ -281,7 +303,8 @@ class MotorsJourney:
         keystroke, and a value pasted in one shot does not always trigger the
         lookup that populates the panel.
         """
-        self.page.click(f"#{control_id}", timeout=8000)
+        self.dismiss_overlay()
+        self.page.locator(f"#{control_id}").click(force=True, timeout=8000)
         # fill() (not type()): Angular re-renders this input, and a keystroke
         # sequence races that re-render — the text silently failed to land.
         self.page.fill(f"#{control_id}", str(value), timeout=8000)
@@ -289,7 +312,7 @@ class MotorsJourney:
         if landed.strip().upper() != str(value).strip().upper():
             log.warning("│    %s: typed %r but field holds %r",
                         control_id, value, landed)
-        picked = self._pick_option(value)
+        picked = self._pick_option(value, control_id)
         if picked is None:
             log.warning("│    %s: no options for %r (field now %r)",
                         control_id, value,
@@ -297,8 +320,28 @@ class MotorsJourney:
         return picked
 
     def set_matselect(self, control_id: str, value: str) -> str | None:
-        self.page.click(f"#{control_id}", timeout=8000)
+        self.dismiss_overlay()
+        self.page.locator(f"#{control_id}").click(force=True, timeout=8000)
         return self._pick_option(value)
+
+    def set_vehicle_select(self, control_id: str) -> str | None:
+        """Choose a find-your-car dropdown option by scoring the whole vehicle."""
+        self.page.click(f"#{control_id}", timeout=8000)
+        opts = self._mat_options()
+        texts = [o["text"] for o in opts]
+        want = best_vehicle_option(texts, self.vehicle)
+        if want is None:
+            self.match_failures.append(
+                {"wanted": f"(vehicle match for {control_id})", "options": texts})
+            log.warning("│    %s: no confident vehicle match among %s",
+                        control_id, texts[:8])
+            self.dismiss_overlay()
+            return None
+        hit = next(o for o in opts if o["text"] == want)
+        self._click_option(hit["id"])
+        self.page.wait_for_timeout(1200)
+        self.dismiss_overlay()
+        return want
 
     def set_text(self, control_id: str, value: str) -> bool:
         try:
@@ -382,14 +425,20 @@ class MotorsJourney:
                 if not cid:
                     continue
                 value = self.value_for(c)
-                if value is None:
+                vehicle_sel = (c["kind"] == "matselect" and bool(self.vehicle)
+                               and is_vehicle_select(cid))
+                if value is None and not vehicle_sel:
                     continue
                 filled = not is_blank(c.get("value"))
                 if c["kind"] == "radio":
                     pass          # radio groups are handled before this loop
                 elif c["kind"] == "matselect" and not filled:
-                    got = self.set_matselect(cid, value)
-                    log.info("│    select %s -> %r", cid, got)
+                    if vehicle_sel:
+                        got = self.set_vehicle_select(cid)
+                        log.info("│    vehicle %s -> %r", cid, got)
+                    else:
+                        got = self.set_matselect(cid, value)
+                        log.info("│    select %s -> %r", cid, got)
                     acted = got is not None
                 elif c["kind"] == "select" and not filled:
                     try:
@@ -408,7 +457,16 @@ class MotorsJourney:
                 if acted:
                     break            # re-scan: that answer may have revealed more
             if not acted:
-                break
+                # Nothing left to do *yet*. A revealed field can take longer than
+                # one settle to render, and concluding early submits a form that
+                # looks complete but is not — which reads as "Please make a
+                # selection" on a step whose controls are all ng-valid.
+                self.page.wait_for_timeout(SETTLE_MS * 2)
+                confirm = self.scan()
+                if signature(confirm) == signature(scan):
+                    return confirm
+                scan = confirm
+                continue
             self.page.wait_for_timeout(SETTLE_MS)
             scan = self.scan()
         return scan
@@ -416,13 +474,25 @@ class MotorsJourney:
     def unfilled(self, scan: dict) -> list[str]:
         """Visible controls still empty that no mapping covers — the real gaps."""
         out = []
+        groups: dict[str, list[dict]] = {}
         for c in scan["controls"]:
-            if c["kind"] in ("radio", "checkbox"):
+            if c["kind"] == "radio":
+                groups.setdefault(c.get("name") or c.get("id") or "?", []).append(c)
+                continue
+            if c["kind"] == "checkbox":
                 continue
             if not is_blank(c.get("value")):
                 continue
             if self.value_for(c) is None:
                 out.append(c.get("id") or c.get("fcn") or "?")
+        # Radio groups were skipped here, so an unanswered question with no
+        # mapping produced no gap and no error — the step just refused to advance
+        # with nothing naming the culprit.
+        for name, members in groups.items():
+            if any(m.get("checked") for m in members):
+                continue
+            labels = [m.get("label", "")[:30] for m in members]
+            out.append(f"{name} (radio; options={labels})")
         return out
 
     # Continue is #btnSave on the first step but not on every step, so it is
@@ -481,6 +551,74 @@ class MotorsJourney:
         return False
 
 
+# The journey asks for annual kilometres as a band, while the input carries a
+# number, so the number has to be placed into the band the UI offers.
+KM_BANDS = (
+    (5000, "0-5,000km"),
+    (10000, "5,001-10,000km"),
+    (15000, "10,001-15,000km"),
+    (20000, "15,001-20,000km"),
+    (30000, "20,001-30,000km"),
+)
+
+
+def _norm_option(text: str) -> str:
+    """Compare option text ignoring case, punctuation and filler words."""
+    words = re.sub(r"[^a-z0-9 ]+", " ", (text or "").lower()).split()
+    drop = {"a", "an", "the", "in", "on", "at", "of", "and", "km", "kms"}
+    return " ".join(w for w in words if w not in drop)
+
+
+def km_band(raw: str | int | float | None) -> str:
+    """Return the band label for an annual-kilometres input.
+
+    The input usually already IS a band ("5,001-10,000KM"), which float() cannot
+    parse — it fell back to 0 and selected "0-5,000km", understating mileage on
+    every record and changing the premium. A band is passed through; only a bare
+    number gets bucketed.
+    """
+    text = str(raw or "").strip()
+    if "-" in text or "+" in text:
+        return text
+    try:
+        km = float(text.replace(",", "") or 0)
+    except ValueError:
+        km = 0
+    for ceiling, label in KM_BANDS:
+        if km <= ceiling:
+            return label
+    return "30,001+km"
+
+
+MONTHS = ("January", "February", "March", "April", "May", "June",
+          "July", "August", "September", "October", "November", "December")
+
+
+def _int_str(raw: str) -> str:
+    """"2026.0" -> "2026"; the input carries these as floats."""
+    try:
+        return str(int(float(raw)))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _month_name(raw: str) -> str:
+    """"7.0" -> "July"; the journey lists months by name."""
+    try:
+        return MONTHS[int(float(raw)) - 1]
+    except (TypeError, ValueError, IndexError):
+        return ""
+
+
+def _age_started(age: str, years_held: str) -> str:
+    """Age they began driving = current age - years licensed."""
+    try:
+        started = int(float(age or 0)) - int(float(years_held or 0))
+    except ValueError:
+        return ""
+    return str(started) if started >= 15 else ""
+
+
 def build_answers(rec: dict) -> dict:
     """Map input columns onto the journey's control ids.
 
@@ -527,16 +665,28 @@ def build_answers(rec: dict) -> dict:
         "selected-licence": g("LICENCE_TYPE"),
         "selected-employment": g("EMPLOYMENT"),
         "-days-per-week": g("DAYSPERWEEK"),
-        "-commuting": "Yes",
+        "how-many-days-a-week-commuting": str(int(float(g("DAYSPERWEEK", "5") or 5))),
+        # The UI words this as Regular/No commuting, not Yes/No — the API flow's
+        # COMMUTING=Yes has no matching option text.
+        "used-for-commuting": ("Regular commuting" if g("DAYSPERWEEK") not in ("", "0")
+                               else "No commuting"),
         "-commute-distance": "25 Up To 50km",
+        "-distance-to-work": "25 Up To 50km",
         "-annual-km": g("PG_ANNUALKM"),
+        "selected-kilometers-per-year": km_band(g("PG_ANNUALKM")),
         "-kilometres": g("PG_ANNUALKM"),
 
         # ── parking ───────────────────────────────────────────────────
+        # Parking location dropdowns take the garage description; the address and
+        # suburb autocompletes on the same step take an address. Keying both on
+        # "-parking" typed "GARAGE - PRIVATE AND LOCKED" into the address lookup,
+        # which unsurprisingly found nothing.
+        "parking-location": g("PG_GARAGE"),
+        "night-parking-location": g("PG_GARAGE"),
+        "daytime-parking-location": g("PG_GARAGE"),
         "-garage": g("PG_GARAGE"),
-        "-parking": g("PG_GARAGE"),
-        "-address": g("ADDRESS"),
-        "-suburb": g("SUBURB"),
+        "-address": f'{g("ADDRESS")} {g("SUBURB")} {g("STATE")} {g("POSTCODE")}'.strip(),
+        "-suburb": f'{g("SUBURB")} {g("STATE")} {g("POSTCODE")}'.strip(),
         "-postcode": g("POSTCODE"),
         "-state": g("STATE"),
 
@@ -544,21 +694,53 @@ def build_answers(rec: dict) -> dict:
         "-first-name": g("FIRST_NAME_DUMMY"),
         "-last-name": g("LAST_NAME_DUMMY"),
         "-gender": g("PG_GENDER"),
+        # One field, not three parts as the API flow sent it.
+        "date-of-birth": "{:02d}/{:02d}/{}".format(
+            int(float(g("DOB_DUMMY_DAY", "1"))),
+            int(float(g("DOB_DUMMY_MONTH", "1"))),
+            g("DOB_DUMMY_YEAR", "1980")),
         "-dob-day": g("DOB_DUMMY_DAY"),
         "-dob-month": g("DOB_DUMMY_MONTH"),
         "-dob-year": g("DOB_DUMMY_YEAR"),
+        # The UI journey demands contact details the API flow never needed, and
+        # the motors input carries none. These are deliberately unusable: the
+        # domain is IANA-reserved so the address cannot receive mail, and the
+        # number is the conventional all-zeros placeholder — nothing here can
+        # reach a real person. Override with YOUI_QUOTE_EMAIL / YOUI_QUOTE_MOBILE.
+        # Plus-addressing and dots in the local part were rejected as invalid, so
+        # the sample number is reduced to alphanumerics.
+        "-email": os.getenv(
+            "YOUI_QUOTE_EMAIL",
+            "wmcquote{}@example.com".format(
+                re.sub(r"[^A-Za-z0-9]", "", g("Sample_Number")) or "sample")),
+        "-mobile-number": os.getenv("YOUI_QUOTE_MOBILE", "0400000000"),
+        "-phone-number": os.getenv("YOUI_QUOTE_MOBILE", "0400000000"),
 
         # ── driving details ───────────────────────────────────────────
         "-licence-type": g("LICENCE_TYPE"),
         "-years-held-licence": g("PC_YEARSHELDLICENSE"),
+        # The journey asks the age they started driving; the input carries current
+        # age and years held, so it is the difference.
+        "age-start-driving": _age_started(g("PC_AGE"), g("PC_YEARSHELDLICENSE")),
+        # The API flow answered No to both of these.
+        "license-suspended": "No",
+        "licence-suspended": "No",
+        "own-another-vehicle": "No",
         "-demerit": "0",
         "-mobile-phone": "Never",
 
         # ── incidents ─────────────────────────────────────────────────
+        # INCIDENT_CAUSE1 already uses Youi's own wording ("NOT AT FAULT
+        # COLLISION" -> "Not At Fault Collision"), so option matching handles it
+        # once case and punctuation are normalised. "NO CLAIM" means no incidents,
+        # in which case the follow-up fields never appear.
+        "incident-history-group-has-any": (
+            "No" if g("INCIDENT_CAUSE1") in ("", "NO CLAIM") else "Yes"),
+        "-incidenttype": g("INCIDENT_CAUSE1"),
+        "-incidentyearkey": _int_str(g("DATE_INCIDENT_YEAR")),
+        "-incidentmonthkey": _month_name(g("DATE_INCIDENT_MONTH")),
         "-incident-cause": g("INCIDENT_CAUSE1"),
         "-claim-type": g("NPG_TYPE_OF_CLAIM"),
-        "-incident-month": g("DATE_INCIDENT_MONTH"),
-        "-incident-year": g("DATE_INCIDENT_YEAR"),
 
         # ── employment ────────────────────────────────────────────────
         "-employment": g("EMPLOYMENT"),
@@ -575,3 +757,135 @@ def build_answers(rec: dict) -> dict:
         "-finance": "No",
         "-duty-of-disclosure": "No",
     }
+
+# ── vehicle identification ────────────────────────────────────────────
+# The find-your-car dropdowns are dynamic: for one car "Type" reads
+# "GX - 5 dr - Hatchback - FWD" (badge + body) and for another
+# "4 dr - Auto - CVT Auto - 2.4L" (body + transmission + engine). No single input
+# column can drive them, so options are scored against every vehicle attribute we
+# hold and an ambiguous result is refused rather than guessed — picking the wrong
+# variant yields a plausible premium for the wrong car, which is worse than no row.
+
+# Scoped to the find-your-car section: a bare "-type" would also catch, say, a
+# licence-type dropdown and score it as if it were a vehicle.
+VEHICLE_SECTION = ("find-your-car", "lookup-by-make-and-model")
+VEHICLE_SELECT_HINTS = ("-type", "-style", "-model-code", "-description",
+                        "-badge", "-series", "-variant")
+
+
+def is_vehicle_select(control_id: str) -> bool:
+    cid = (control_id or "").lower()
+    return (any(sec in cid for sec in VEHICLE_SECTION)
+            and any(h in cid for h in VEHICLE_SELECT_HINTS))
+
+
+def _trans_class(raw: str) -> str:
+    t = (raw or "").upper()
+    if "CVT" in t or "CONTINUOUS" in t or "CONSTANT VARIABLE" in t:
+        return "CVT"
+    if "DUAL CLUTCH" in t or "DCT" in t:
+        return "DCT"
+    if "MANUAL" in t:
+        return "MANUAL"
+    if "AUTO" in t:
+        return "AUTO"
+    return ""
+
+
+def _drive_class(variant: str, body: str) -> str:
+    """FWD vs AWD from the variant text.
+
+    The Style dropdown can differ only by drivetrain ("Wagon - AWD - Petrol" vs
+    "Wagon - FWD - Petrol"), and the input spells it inside the variant as 2WD or
+    AWD. Drivetrain is a rating factor, so getting it wrong misprices the quote.
+    """
+    t = f"{variant} {body}".upper()
+    if re.search(r"\bAWD\b|\b4WD\b|\b4X4\b|ALL WHEEL", t):
+        return "AWD"
+    if re.search(r"\b2WD\b|\bFWD\b|\bRWD\b|FRONT WHEEL", t):
+        return "FWD"
+    return ""
+
+
+def vehicle_signals(rec: dict) -> dict:
+    g = lambda k: (rec.get(k) or "").strip().upper()
+    body = g("PG_GG_BODYSTYLE")
+    doors = ""
+    m = re.match(r"(\d)\s*D\b", body)
+    if m:
+        doors = m.group(1)
+    badge = [w for w in re.split(r"[^A-Z0-9]+", g("PG_GG_VARIANT")) if len(w) > 1]
+    return {
+        "engsize": g("PG_GG_ENGSIZE"),
+        "trans": _trans_class(g("PG_GG_TRANS")),
+        "doors": doors,
+        "body_words": [w for w in re.split(r"[^A-Z]+", body) if len(w) > 2],
+        "badge": badge,
+        "variant_full": g("PG_GG_VARIANT"),
+        "drive": _drive_class(g("PG_GG_VARIANT"), body),
+        "series": g("PG_GG_SERIES"),
+    }
+
+
+def score_vehicle_option(text: str, sig: dict) -> int:
+    """Score one dropdown option against the vehicle we are trying to match."""
+    t = (text or "").upper()
+    score = 0
+    if sig["engsize"] and sig["engsize"] in t:
+        score += 4                      # engine size is the sharpest signal
+    if sig["trans"]:
+        if sig["trans"] == "CVT" and "CVT" in t:
+            score += 3
+        elif sig["trans"] == "MANUAL" and "MANUAL" in t:
+            score += 3
+        elif sig["trans"] == "DCT" and ("DCT" in t or "DUAL CLUTCH" in t):
+            score += 3
+        elif sig["trans"] == "AUTO" and "AUTO" in t and "CVT" not in t:
+            score += 2
+        # a manual option for an automatic car (or vice versa) is disqualifying
+        if sig["trans"] == "MANUAL" and "MANUAL" not in t and "AUTO" in t:
+            score -= 4
+        if sig["trans"] in ("AUTO", "CVT", "DCT") and "MANUAL" in t:
+            score -= 4
+    if sig.get("drive"):
+        drive_words = {"FWD": r"\b(FWD|2WD)\b", "AWD": r"\b(AWD|4WD|4X4)\b"}
+        if re.search(drive_words.get(sig["drive"], rf"\b{sig['drive']}\b"), t):
+            score += 3
+        elif re.search(r"\b(AWD|FWD|RWD|4WD|2WD)\b", t):
+            score -= 4          # option states a different drivetrain
+    if sig["doors"] and re.search(rf"\b{sig['doors']}\s*(DR|DOOR)", t):
+        score += 1
+    for word in sig["body_words"]:
+        if word in t:
+            score += 1
+    for word in sig["badge"]:
+        if re.search(rf"\b{re.escape(word)}\b", t):
+            score += 3
+    # "GX" and "GX Hybrid" both contain the badge, so an exact match on the
+    # option's leading segment is what separates the base variant from its
+    # siblings; without it the pair ties and the choice is (rightly) refused.
+    if sig["variant_full"]:
+        lead = t.split(" - ")[0].strip()
+        if _norm_option(lead) == _norm_option(sig["variant_full"]):
+            score += 5
+    if sig["series"]:
+        if sig["series"] in t:
+            score += 4              # full series, e.g. "ZL MY19"
+        elif sig["series"].split()[0] in t:
+            score += 1              # family only, e.g. "ZL"
+    return score
+
+
+def best_vehicle_option(options: list[str], sig: dict) -> str | None:
+    """Highest-scoring option, or None when the result is not clear-cut."""
+    if not options:
+        return None
+    scored = sorted(((score_vehicle_option(o, sig), o) for o in options),
+                    key=lambda x: -x[0])
+    if len(scored) == 1:
+        return scored[0][1] if scored[0][0] > 0 else None
+    (top, best), (runner, _) = scored[0], scored[1]
+    if top <= 0 or top == runner:
+        return None                     # ambiguous — refuse rather than guess
+    return best
+

@@ -71,25 +71,6 @@ class YouiCombinedCrawler(BaseYouiCrawler):
             logger.error(f"Failed to initialize session: {e}")
             raise
 
-    def populate_page_01(self):
-        self.property_address = self.get_address_by_suburb()
-        if self.property_address:
-            translation = self.mappings.translate_input_data_page_01(self.property_address)
-
-        # Prepare JSON for API
-        self.base_json_data.setdefault("quoteData", {}).update(translation)
-        self.base_json_data["currentStep"] = "provisionalPolicyType"
-        self.base_json_data["flowInstanceId"] = self.flow_instance_id
-
-        # Send and update
-        response_json_data = self.make_request(
-            self.quote_url,
-            method="PUT",
-            payload=self.base_json_data,
-        )
-        self.base_json_data = self.update_json(response_json_data)
-        return self.base_json_data
-
     def populate_page_02(self):
         translation = self.mappings.translate_input_data_page_02()
         self.base_json_data["quoteData"].update(translation)
@@ -339,25 +320,6 @@ class YouiBuildingCrawler(BaseYouiCrawler):
         except Exception as e:
             logger.error(f"Failed to initialize session: {e}")
             raise
-
-    def populate_page_01(self):
-        self.property_address = self.get_address_by_suburb()
-        if self.property_address:
-            translation = self.mappings.translate_input_data_page_01(self.property_address)
-
-        # Prepare JSON for API
-        self.base_json_data.setdefault("quoteData", {}).update(translation)
-        self.base_json_data["currentStep"] = "provisionalPolicyType"
-        self.base_json_data["flowInstanceId"] = self.flow_instance_id
-
-        # Send and update
-        response_json_data = self.make_request(
-            self.quote_url,
-            method="PUT",
-            payload=self.base_json_data,
-        )
-        self.base_json_data = self.update_json(response_json_data)
-        return self.base_json_data
 
     def populate_page_02(self):
         translation = self.mappings.translate_input_data_page_02()
@@ -658,29 +620,6 @@ class YouiContentsCrawler(BaseYouiCrawler):
         except Exception as e:
             logger.error(f"Failed to initialize session: {e}")
             raise
-
-    def populate_page_01(self):
-        self.property_address = self.get_address_by_suburb()
-        if self.property_address:
-            translation = self.mappings.translate_input_data_page_01(self.property_address)
-        else:
-            self.message = "Address not found"
-            return "Address"
-
-
-        # Prepare JSON for API
-        self.base_json_data.setdefault("quoteData", {}).update(translation)
-        self.base_json_data["currentStep"] = "provisionalPolicyType"
-        self.base_json_data["flowInstanceId"] = self.flow_instance_id
-
-        # Send and update
-        response_json_data = self.make_request(
-            self.quote_url,
-            method="PUT",
-            payload=self.base_json_data,
-        )
-        self.base_json_data = self.update_json(response_json_data)
-        return self.base_json_data
 
     def populate_page_02(self):
         translation = self.mappings.translate_input_data_page_02()

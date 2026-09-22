@@ -124,6 +124,30 @@ def safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+
+def match_vehicle_lookup(rec, lookup_list, parameter="value"):
+    """Pick a vehicle type/style/description option by scoring the whole vehicle.
+
+    find_best_match() compares one composed string with fuzzy ratio and, on a
+    miss, silently returns the FIRST option. For a 2.4L FWD petrol ES it picked a
+    2.0L auto, then an AWD Hybrid, then an "Exceed Phev" — a different car, which
+    is both a wrong premium and (being a PHEV) the sort of vehicle that gets the
+    quote referred rather than priced online.
+
+    The scorer in motors_ui_flow weighs engine size, transmission class,
+    drivetrain, doors, body, badge and series, and returns nothing when the
+    result is not clear-cut. Falling back to find_best_match keeps the old
+    behaviour for anything it declines, and the caller logs which was used.
+    """
+    from motors_ui_flow import best_vehicle_option, vehicle_signals
+
+    texts = [str(item.get(parameter, "")) for item in lookup_list]
+    want = best_vehicle_option(texts, vehicle_signals(rec))
+    if want is None:
+        return None
+    return next(item for item in lookup_list
+                if str(item.get(parameter, "")) == want)
+
 def find_best_match(
     user_input: str,
     lookup_list: List[Dict],
@@ -931,7 +955,13 @@ class YouiMotorsNewFlow:
             f"{i['PG_GG_VARIANT']} - {i['PG_GG_SERIES']} - "
             f"{i['PG_GG_BODYSTYLE']}"
         )
-        v_type = find_best_match(v_type_input, types, "value")
+        v_type = match_vehicle_lookup(i, types, "value")
+        if v_type is None:
+            logger.warning("⚠️ vehicle scorer declined %s — "
+                           "falling back to fuzzy match", "v_type")
+            v_type = find_best_match(v_type_input, types, "value")
+        else:
+            logger.info("🚗 %s matched by scorer: %r", "v_type", v_type.get("value"))
 
         styles = self._lookup(
             "common/vehicle-styles",
@@ -948,7 +978,13 @@ class YouiMotorsNewFlow:
         style_input = (
             f"{i['PG_GG_TRANS']} - {i['PG_GG_ENGSIZE']}"
         )
-        style = find_best_match(style_input, styles, "value")
+        style = match_vehicle_lookup(i, styles, "value")
+        if style is None:
+            logger.warning("⚠️ vehicle scorer declined %s — "
+                           "falling back to fuzzy match", "style")
+            style = find_best_match(style_input, styles, "value")
+        else:
+            logger.info("🚗 %s matched by scorer: %r", "style", style.get("value"))
 
         descs = self._lookup(
             "common/vehicle-descriptions",
@@ -963,7 +999,13 @@ class YouiMotorsNewFlow:
                 }
             },
         )
-        desc = find_best_match(i["PG_GG_ENGINE"], descs, "value")
+        desc = match_vehicle_lookup(i, descs, "value")
+        if desc is None:
+            logger.warning("⚠️ vehicle scorer declined %s — "
+                           "falling back to fuzzy match", "desc")
+            desc = find_best_match(i["PG_GG_ENGINE"], descs, "value")
+        else:
+            logger.info("🚗 %s matched by scorer: %r", "desc", desc.get("value"))
 
         color = find_best_match(i["COLOUR"], COLORS, "value")
 

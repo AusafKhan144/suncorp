@@ -588,12 +588,9 @@ class BaseYouiCrawler:
                 # Handle non-retryable statuses right away
                 if response.status_code in non_retryable_statuses:
                     if response.status_code == 400 and "getAddress" in url:
-                        self.message = "Address Not Found"
-                        self.search_for_quote_failure()
-                        self.write_csv()
-                        return None
+                        return None  # caller retries with a fresh moniker
 
-                    elif "addressSelectorConditionValidator" in response.json():
+                    elif "addressSelectorConditionValidator" in response.text:
                         self.message = "Address Not Found"
                         self.search_for_quote_failure()
                         self.write_csv()
@@ -692,36 +689,33 @@ class BaseYouiCrawler:
                 payload=payload,
             )
 
-        # Primary search: full formatted address
         address_search_phrase = f"{address}, {suburb} {state} {postcode}"
-        print(f"🔍 Searching with full phrase: {address_search_phrase}")
-        address_search_result = search_address(address_search_phrase)
+        fallback_phrase = f"{address}, {suburb}"
 
-        # Fallback: address and suburb only
-        if not address_search_result:
-            fallback_phrase = f"{address}, {suburb}"
-            print(f"⚠️ No results, retrying with fallback phrase: {fallback_phrase}")
-            address_search_result = search_address(fallback_phrase)
+        # Experian's getAddress returns a bare 400 intermittently, so re-search with a
+        # fresh moniker before giving up, and try the other candidates it offered.
+        for attempt in range(1, 4):
+            print(f"🔍 Searching with full phrase: {address_search_phrase} (attempt {attempt}/3)")
+            candidates = search_address(address_search_phrase)
+            if not candidates:
+                print(f"⚠️ No results, retrying with fallback phrase: {fallback_phrase}")
+                candidates = search_address(fallback_phrase) or []
 
-        if not address_search_result:
-            print("❌ Still no address results found.")
-            return
+            for candidate in candidates[:3]:
+                payload = {"moniker": candidate.get("moniker"), "flowInstanceId": self.flow_instance_id}
+                resolved = self.make_request(
+                    "https://quote.youi.com.au/api/experian/getAddress",
+                    method="POST",
+                    payload=payload,
+                )
+                if resolved:
+                    return {**resolved, **{"experianSearchResult": candidate}}
+                print(f"⚠️ getAddress failed for {candidate.get('address')!r}")
 
-        search_results = address_search_result[0]
-        moniker = search_results.get("moniker")
-
-        payload = {"moniker": moniker, "flowInstanceId": self.flow_instance_id}
-        address_final_result = self.make_request(
-            "https://quote.youi.com.au/api/experian/getAddress",
-            method="POST",
-            payload=payload,
-        )
-
-        if not address_final_result:
-            print("❌ Failed to resolve final address.")
-            return
-
-        return {**address_final_result, **{"experianSearchResult": search_results}}
+        print(f"❌ Address unresolved after 3 attempts: {address_search_phrase}")
+        self.message = "Address Not Found"
+        self.search_for_quote_failure()
+        return None
 
     def search_for_quote_failure(self):
         quote_data = self.base_json_data.get("quoteData", {})

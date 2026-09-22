@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 import asyncio
 import json
 from datetime import datetime, date
@@ -9,7 +9,7 @@ import csv
 import os
 import random
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 import requests
 from requests.exceptions import RequestException, SSLError
@@ -433,6 +433,9 @@ class YouiMappings:
 
 
 class BaseYouiCrawler:
+    ADDRESS_ATTEMPTS = 3  # search -> getAddress rounds before calling an address unfindable
+    ADDRESS_CANDIDATES = 4  # Experian hits tried per round (the quote rejects some it resolves)
+
     def __init__(self):
         """Initialize the crawler with default instance variables."""
         self.headers: Dict[str, str] = {}
@@ -496,15 +499,9 @@ class BaseYouiCrawler:
                     if response.status_code == 400:
                         logger.error(response.text)
                     if response.status_code == 400 and "getAddress" in url:
-                        self.message = "Address Not Found"
-                        self.search_for_quote_failure()
-                        self.write_csv()
-                        return None
-                    elif "addressSelectorConditionValidator" in response.json():
-                        self.message = "Address Not Found"
-                        self.search_for_quote_failure()
-                        self.write_csv()
-                        return None
+                        return None  # caller retries with a fresh moniker
+                    elif "addressSelectorConditionValidator" in response.text:
+                        return None  # quote rejected this address; caller tries the next candidate
                     logger.error(f"Non-retry-able error {response.status_code}")
                     response.raise_for_status()
 
@@ -574,53 +571,74 @@ class BaseYouiCrawler:
             "quoteData": response.get("quoteData", {}),
         }
 
-    def get_address_by_suburb(self) -> Optional[Dict[str, Any]]:
-        """
-        Search and resolve address by suburb.
-        
-        Changes: Replaced prints with logs; added input validation.
+    def resolved_addresses(self) -> Iterator[Dict[str, Any]]:
+        """Yield resolvable Experian candidates for the input address, best match first.
+
+        Callers keep pulling until the quote accepts one: getAddress 400s
+        intermittently, and the quote's addressSelector rejects some addresses it
+        happily resolves (a ranged street number like '1177-1185' is one).
         """
         required_keys = ["suburb", "postcode", "address", "state"]
         if not all(key in self.input_data for key in required_keys):
             logger.error("Missing required input_data keys")
-            return None
+            return
 
         suburb = self.input_data["suburb"]
         postcode = self.input_data["postcode"]
         address = self.input_data["address"]
         state = self.input_data["state"]
 
-        def search_address(phrase: str) -> Optional[list] | None:
+        def search_address(phrase: str) -> Optional[list]:
             payload = {"searchTerm": phrase, "flowInstanceId": self.flow_instance_id}
             return self.make_request("https://quote.youi.com.au/api/experian/search", method="POST", payload=payload)
 
-        # Primary search
         address_search_phrase = f"{address}, {suburb} {state} {postcode}"
-        logger.info(f"Searching with full phrase: {address_search_phrase}")
-        address_search_result = search_address(address_search_phrase)
+        fallback_phrase = f"{address}, {suburb}"
 
-        # Fallback
-        if not address_search_result:
-            fallback_phrase = f"{address}, {suburb}"
-            logger.warning(f"No results, retrying with: {fallback_phrase}")
-            address_search_result = search_address(fallback_phrase)
+        for attempt in range(1, self.ADDRESS_ATTEMPTS + 1):
+            logger.info(f"Searching with full phrase: {address_search_phrase} (attempt {attempt}/{self.ADDRESS_ATTEMPTS})")
+            candidates = search_address(address_search_phrase)
+            if not candidates:
+                logger.warning(f"No results, retrying with: {fallback_phrase}")
+                candidates = search_address(fallback_phrase) or []
 
-        if not address_search_result:
-            logger.error("No address results found")
-            return None
+            resolved_any = False
+            for candidate in candidates[: self.ADDRESS_CANDIDATES]:
+                payload = {"moniker": candidate.get("moniker"), "flowInstanceId": self.flow_instance_id}
+                resolved = self.make_request(
+                    "https://quote.youi.com.au/api/experian/getAddress", method="POST", payload=payload
+                )
+                if not resolved:
+                    logger.warning(f"getAddress failed for {candidate.get('address')!r}")
+                    continue
+                resolved_any = True
+                yield {**resolved, **{"experianSearchResult": candidate}}
 
-        search_results = address_search_result[0]
-        moniker = search_results.get("moniker")
-        payload = {"moniker": moniker, "flowInstanceId": self.flow_instance_id}
-        address_final_result = self.make_request(
-            "https://quote.youi.com.au/api/experian/getAddress", method="POST", payload=payload
-        )
+            if resolved_any:
+                return  # every resolvable candidate was rejected downstream
 
-        if not address_final_result:
-            logger.error("Failed to resolve final address")
-            return None
+        logger.error(f"No resolvable address for: {address_search_phrase}")
 
-        return {**address_final_result, **{"experianSearchResult": search_results}}
+    def populate_page_01(self) -> Dict[str, Any]:
+        """Submit page 1, walking the address candidates until the quote takes one."""
+        for property_address in self.resolved_addresses():
+            translation = self.mappings.translate_input_data_page_01(property_address)
+            self.base_json_data.setdefault("quoteData", {}).update(translation)
+            self.base_json_data["currentStep"] = "provisionalPolicyType"
+            self.base_json_data["flowInstanceId"] = self.flow_instance_id
+
+            response_json_data = self.make_request(self.quote_url, method="PUT", payload=self.base_json_data)
+            if response_json_data:
+                self.property_address = property_address
+                self.base_json_data = self.update_json(response_json_data)
+                return self.base_json_data
+
+            rejected = property_address.get("experianSearchResult", {}).get("address")
+            logger.warning(f"Quote rejected address {rejected!r}, trying next candidate")
+
+        self.message = "Address Not Found"
+        self.search_for_quote_failure()  # writes the failure row
+        raise RuntimeError(f"No address accepted for: {self.input_data.get('address')}")
 
     def extract_business_data(self,business_type) -> Dict[str, Any]:
         response = self.make_request(f"https://quote.youi.com.au/api/industries?searchString={business_type}", method="GET")
