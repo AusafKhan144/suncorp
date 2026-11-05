@@ -29,7 +29,16 @@ not appear. If it names the wrong period, either export `SUNCORP_PERIOD=YYYYMM`
 or write that value into a `PERIOD` file at the repo root — otherwise the newest
 `inputs/<YYYYMM>/data` wins.
 
-**3. Split Youi into chunks** (Youi only — it fans out across 10 runners):
+NRMA writes the client's `delivery_template` columns (Suncorp, 2026-10-22),
+plus one `Rerun_` column per field the drop's `lookup` marks "Bot allowed to
+toggle to achieve desired SI", after the template's three (Suncorp,
+2026-10-29). `python NRMA/home/test_template_columns.py` fails if this drop's
+template or lookup changed; update the scrapers' `MAIN_FIELDS`/`TOGGLE_FIELDS`
+or `si_steps.py`'s field lists before collecting.
+
+**3. Split Youi into chunks** (Youi only — it fans out across 10 runners per
+file). A quarterly drop's two toggles and Combined are picked up as well, and
+the samples all three share go in chunk 1 of each so they are quoted together:
 
 ```bash
 python chunkify.py
@@ -40,16 +49,31 @@ python chunkify.py
 ```bash
 cd NRMA/home && setsid nohup python3 launch_free_pool.py contents.py >> contents_stdout.log 2>&1 &
 cd NRMA/home && setsid nohup python3 launch_free_pool.py building.py >> buildings_stdout.log 2>&1 &
+cd NRMA/home && setsid nohup python3 launch_free_pool.py combined.py >> combined_stdout.log 2>&1 &   # quarterly only
 python run_youi.py all          # `python run_youi.py list` to see the configs first
 ```
 
-`launch_free_pool.py` picks the first proxy pool that is not resting. Both NRMA
+`launch_free_pool.py` picks the first proxy pool that is not resting — never
+`direct` (the office IP): unattended and unpaced it gets bot-flagged, which cost
+46h of zero rows on 2026-10-07. Use direct only by hand, paced and alone
+(`NRMA_PROXY_PROVIDER=direct NRMA_PROFILE_DELAY=90 python3 contents.py`). The
+`mobile` pool (AU carrier IPs) is tried first once `NRMA/home/secrets.conf` has
+one `MOBILE_PROXY_URL=http://USER:PASS@host:port` line, with `{session}` where
+the provider's sticky-session id goes; without that line it does not exist. A pool
+name may carry a country (`iproyal-gb` = iProyal's UK IPs, own cooldown): NRMA
+neither geo-prices nor geo-blocks, so the launcher rotates UK → US → AU on the same
+plans. To add a country, add one entry to `PROXY_POOLS` in `nrma_browser.py`. Both NRMA
 scrapers resume from their own output CSV, so re-running one is always safe and
-never re-collects a row that already has a price.
+never re-collects a row that already has a price. Youi's runners start 30s
+apart per chunk slot, so a quarterly run (5 files × 10 runners) ramps up over
+~4.5 min rather than opening 50 browsers in the same second.
 
 **5. Turn the status card back on.** One line in `crontab -e`, already written
 and commented out at the bottom — it posts progress every 2 hours *and*
-relaunches an NRMA scraper that died with work pending:
+relaunches a scraper (NRMA, or the whole Youi fan-out) that died with work
+pending. A Youi relaunch that lands nothing is held 24h (`⏸` on the card says
+when the next try is due), and files that were dropped but are not collected
+here (stored for safekeeping) get one `stored only` line instead of red alerts:
 
 ```
 0 */2 * * * /home/wmc/anaconda3/bin/python3 <repo>/monitor_status.py >> <repo>/monitor.log 2>&1
@@ -88,9 +112,13 @@ scrapers skip that stage rather than falling back to another period's file.
 
 ```bash
 python period.py --selftest              # period + filename resolution
-python monitor_status.py --selftest      # card classifier
+python monitor_status.py --selftest      # card classifier + relaunch hold
+python Youi/home/test_address_retry.py   # Youi address candidate walk
+python Youi/home/test_toggle_schema.py   # toggle CSV header is first-row-proof
 python NRMA/home/test_prefill_storeys.py # fractional storey_count guard
 python NRMA/home/test_block_breaker.py   # 403 backoff + circuit breaker
+python NRMA/home/test_template_columns.py # outputs = delivery_template + lookup Yes fields
+python NRMA/home/si_steps.py             # sum-insured re-quotes (Suncorp's strip, then large bedrooms)
 python NRMA/home/make_delivery.py --demo # delivery filter
 ```
 

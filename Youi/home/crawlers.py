@@ -296,6 +296,10 @@ class YouiBuildingCrawler(BaseYouiCrawler):
             "excess_2950": "N/A",
             "excess_3000": "N/A",
             "Reason_for_quote_failure": "N/A",
+            # Declared here, not only when a quote carries it: write_csv takes
+            # the header from the first row written, so a decline landing first
+            # left priced rows with an unnamed trailing value (202611).
+            "excess_5000": "N/A",
         }
 
 
@@ -599,6 +603,11 @@ class YouiContentsCrawler(BaseYouiCrawler):
             "excess_2950": "N/A",
             "excess_3000": "N/A",
             "Reason_for_quote_failure": "N/A",
+            # Declared up front for the same reason as Buildings' excess_5000:
+            # the header must not depend on whether a decline lands first.
+            "ContentsAccidentalLossOrDamage": "N/A",
+            "ContentsBusinessItems": "N/A",
+            "ContentsInCommercialStorage": "N/A",
         }
 
         # Preserved for legacy reasons, may be removed after review

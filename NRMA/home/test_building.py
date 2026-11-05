@@ -32,9 +32,10 @@ def test_building_type():
 
 def test_parse_row_uses_mapping():
     """The regression that priced 33 townhouses as freestanding houses."""
-    row = {"Sample_Number": "1", "Building_Type": "Townhouse, duplex or terrace"}
+    row = {"Sample_Number": "1", "Building_Type": "Townhouse, duplex or terrace",
+           "Policy_Effective_Date": "31-Oct-2026"}
     assert B._parse_row(row).building_type == "TOWNHOUSE_TERRACE_HOUSE_OR_DUPLEX"
-    assert B._parse_row({"Sample_Number": "2"}).building_type == "FREESTANDING_HOME"
+    assert B._parse_row({"Sample_Number": "2", "Policy_Effective_Date": "31-Oct-2026"}).building_type == "FREESTANDING_HOME"
 
 
 def test_enum_maps_match_the_live_ui_values():
@@ -73,6 +74,8 @@ def test_parse_row_applies_fixed_enums():
     row = {
         "Sample_Number": "1", "Slope": "Severe",
         "Storeys_If_House": "4+", "Fixture_Quality": "High",
+        # a blank cover date stops the run by design (cover_start_date)
+        "Policy_Effective_Date": "31-Oct-2026",
     }
     p = B._parse_row(row)
     assert p.slope == "SEVERE"
@@ -138,8 +141,10 @@ def test_row_keys_match_the_headers_exactly():
     assert set(B.MAIN_FIELDS) <= set(B.TOGGLE_FIELDS)
 
     # Toggle carries the sweep and the per-frequency prices; main must not.
+    # +11: 3 frequencies, AD and Fusion per brand, plus Substate (the template's
+    # main sheet has no Substate column).
     only_toggle = set(B.TOGGLE_FIELDS) - set(B.MAIN_FIELDS)
-    assert len(only_toggle) == 2 * len(B.ALL_EXCESS_LEVELS) + 10, sorted(only_toggle)
+    assert len(only_toggle) == 2 * len(B.ALL_EXCESS_LEVELS) + 11, sorted(only_toggle)
     assert not [f for f in B.MAIN_FIELDS if "_excess_" in f]
 
 
@@ -253,10 +258,11 @@ def test_rate_limit_gets_the_long_backoff():
     assert B._should_retry_on_new_session(reason(dyna))
     assert B._is_rate_limited(reason(dyna))
 
-    # A ban is not a throttle: new IP immediately, no long wait.
+    # A 403 waits too: 2026-09-10 A/B, always-wait 2.75 launches/row vs 4.30
+    # for an immediate fresh IP — the ~50s decay is what clears it.
     ban = "POST x → 403: <TITLE>Access Denied</TITLE>"
     assert B._should_retry_on_new_session(reason(ban))
-    assert not B._is_rate_limited(reason(ban))
+    assert B._is_rate_limited(reason(ban))
     assert not B._is_rate_limited(reason(""))
     assert B.RATE_LIMIT_BACKOFF[0] <= B.RATE_LIMIT_BACKOFF[1]
 

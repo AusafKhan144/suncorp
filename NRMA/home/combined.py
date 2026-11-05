@@ -21,18 +21,49 @@ import base64
 import csv
 import json
 import logging
-import math
 import os
+import random
+import sys
 import uuid
 from datetime import datetime
 from typing import Optional
 import httpx
 from dataclasses import dataclass, field
 
+# Transport: same as building.py/contents.py — one Akamai-validated camoufox
+# session per quote via nrma_browser.quote_session. Ported 2026-10-06 off the
+# Zyte API, which "cannot get a session validated" (see nrma_browser.py); the
+# request-shape fixes, the 403 breaker and the shared cooldown come with it.
 try:  # package import (python -m NRMA.home.combined)
-    from .nrma_browser import cover_start_date
+    from .nrma_browser import (
+        AkamaiNotValidated,
+        BLOCK_STREAK_LIMIT,
+        cooldown_hours_left,
+        COOLDOWN_FILE,
+        cover_start_date,
+        is_bot_block,
+        redact,
+        quote_session,
+        secret,
+        start_cooldown,
+        TERMINAL_REASON_PREFIXES,
+    )
+    from .si_steps import CONTENTS_FIELDS as SI_FIELDS, SumInsuredOutOfRange, quote as quote_si
 except ImportError:  # direct script run
-    from nrma_browser import cover_start_date
+    from nrma_browser import (
+        AkamaiNotValidated,
+        BLOCK_STREAK_LIMIT,
+        cooldown_hours_left,
+        COOLDOWN_FILE,
+        cover_start_date,
+        is_bot_block,
+        redact,
+        quote_session,
+        secret,
+        start_cooldown,
+        TERMINAL_REASON_PREFIXES,
+    )
+    from si_steps import CONTENTS_FIELDS as SI_FIELDS, SumInsuredOutOfRange, quote as quote_si
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -54,20 +85,19 @@ for _noisy in ("httpx", "httpcore", "hpack", "urllib3"):
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-ZYTE_API_KEY = "d5f27f9a318349a599774d39b68f0552"
+ZYTE_API_KEY = secret("ZYTE_API_KEY")  # secrets.conf — never inline, this repo is public
 ZYTE_API_URL = "https://api.zyte.com/v1/extract"
 BASE_URL = "https://insurance.nrma.com.au"
 CONNECT_URL = "https://connect.nrma.com.au"  # auth token endpoint
-CONCURRENCY = int(os.getenv("CONCURRENCY", "10"))
+# Paths come from the repo-root period module, like building.py/contents.py.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import period  # noqa: E402
+
+# 1, not the old 10: on NRMA attempt volume is what destroys yield (2026-09-08).
+CONCURRENCY = int(os.getenv("CONCURRENCY", "1"))
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "90"))
-INPUT_MAIN_CSV = os.getenv(
-    "INPUT_MAIN_CSV",
-    "/home/wmc/WMC/DataManipulation/Suncorp/NRMA/inputs/202608/data/Combined_NRMA_quarterly_202608.csv",
-)
-OUTPUT_MAIN_CSV = os.getenv(
-    "OUTPUT_MAIN_CSV",
-    "/home/wmc/WMC/DataManipulation/Suncorp/NRMA/outputs/202608/Combined_NRMA_quarterly_202608.csv",
-)
+INPUT_MAIN_CSV = os.getenv("INPUT_MAIN_CSV") or period.input_csv("NRMA", "Combined") or ""
+OUTPUT_MAIN_CSV = os.getenv("OUTPUT_MAIN_CSV") or period.output_csv("NRMA", "Combined") or ""
 RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
 RETRY_DELAY = float(os.getenv("RETRY_DELAY", "5.0"))
 
@@ -79,56 +109,6 @@ FORCE_RERUN = os.getenv("FORCE_RERUN", "0").strip().lower() in (
     "yes",
     "y",
 )
-
-# ---------------------------------------------------------------------------
-# Sum-insured retry tuning (mirrors NrmaHomeUnifiedExtractor in home.py)
-# Building: +1 large bedroom ≈ +$300,000 to the upper bound.
-# Contents: +1 large bedroom ≈ +$13,000 to the upper bound.
-# ---------------------------------------------------------------------------
-SI_PER_LARGE_BEDROOM_BUILDING = 300_000
-SI_PER_LARGE_BEDROOM_CONTENTS = 13_000
-MAX_LARGE_BEDROOM_ADDITIONS = 10
-MAX_SI_RETRIES = 1  # extra attempts after the first pass
-
-ROOM_OVERRIDE_KEYS = (
-    "SmallBedrooms",
-    "MediumBedrooms",
-    "LargeBedrooms",
-    "Bathrooms",
-    "LivingSpaces",
-    "DiningRooms",
-)
-OUTDOOR_OVERRIDE_KEYS = (
-    "ParkingSpacesCarport",
-    "ParkingSpacesGarage",
-    "InGroundPool",
-)
-OCCUPANT_OVERRIDE_KEYS = (
-    "AdultOccupants",
-    "ChildOccupants",
-)
-
-
-def _apply_room_outdoor_overrides(
-    answers: dict,
-    room_overrides: Optional[dict] = None,
-    outdoor_overrides: Optional[dict] = None,
-    occupant_overrides: Optional[dict] = None,
-) -> dict:
-    """Overlay SI-retry room/outdoor/occupant overrides onto an answers dict in place."""
-    if room_overrides:
-        for k in ROOM_OVERRIDE_KEYS:
-            if k in room_overrides:
-                answers[k] = room_overrides[k]
-    if outdoor_overrides:
-        for k in OUTDOOR_OVERRIDE_KEYS:
-            if k in outdoor_overrides:
-                answers[k] = outdoor_overrides[k]
-    if occupant_overrides:
-        for k in OCCUPANT_OVERRIDE_KEYS:
-            if k in occupant_overrides:
-                answers[k] = occupant_overrides[k]
-    return answers
 
 
 # ---------------------------------------------------------------------------
@@ -338,15 +318,10 @@ class QuoteResult:
     nrma_plus_default_excess: str = ""
     nrma_plus_default_contents_excess: str = ""
     nrma_plus_yearly: str = ""
-    # ── Sum insured actually sent ──
-    contents_sum_insured_used: str = ""
     # ── Error tracking ──
     failure_reason: str = ""
     # ── SI adjustment history (for rerun reporting) ──
-    rerun_small_bedrooms: str = ""
-    rerun_large_bedrooms: str = ""
-    rerun_adults: str = ""
-    rerun_children: str = ""
+    rerun: dict = field(default_factory=dict)  # lookup column -> value, see si_steps.py
 
 
 # ---------------------------------------------------------------------------
@@ -632,9 +607,7 @@ class NRMAClient:
         self.customer_token = None  # x-iag-customer (Okta JWT)
         self.auth_session_token = None  # x-iag-auth-session JWT
         self.cookies: dict = {}  # full cookie jar
-        self.room_overrides: Optional[dict] = None  # set during SI retry
-        self.outdoor_overrides: Optional[dict] = None  # set during SI retry
-        self.occupant_overrides: Optional[dict] = None  # set during SI retry
+        self.si_overrides: Optional[dict] = None  # answers a sum-insured re-quote changes
 
     # ── Cookie management ─────────────────────────────────────────────
 
@@ -790,6 +763,20 @@ class NRMAClient:
     # Step 2 — Validate entitlements
     # ================================================================
     async def step2_validate_entitlements(self):
+        """The app's own first API call. Restored 2026-09-09 in contents.py.
+
+        Not needed for the data, but the `.har` capture of a real journey calls
+        it, and skipping it made our sequence open with quote creation — one of
+        the request-shape contradictions behind the 403 wall. A failure here
+        says nothing about the property, so it must not lose the row.
+        """
+        try:
+            await self._get(
+                f"{BASE_URL}/domain/identity/api/identity-mfe/validateEntitlements",
+                referer=f"{BASE_URL}/get-cover/home",
+            )
+        except Exception as exc:  # noqa: BLE001 — sequence padding, not data
+            log.debug("[%s] Step2 entitlements: %s", self.session_id[:8], exc)
         log.debug("[%s] Step2 done", self.session_id[:8])
 
     # ================================================================
@@ -1028,12 +1015,7 @@ class NRMAClient:
         if profile.who_do_you_rent_with:
             answers["WhoDoYouRentWith"] = profile.who_do_you_rent_with
 
-        _apply_room_outdoor_overrides(
-            answers,
-            self.room_overrides,
-            self.outdoor_overrides,
-            self.occupant_overrides,
-        )
+        answers.update(self.si_overrides or {})
 
         if include_parties:
             party: dict = {
@@ -1133,12 +1115,7 @@ class NRMAClient:
         if profile.who_do_you_rent_with:
             answers["WhoDoYouRentWith"] = profile.who_do_you_rent_with
 
-        _apply_room_outdoor_overrides(
-            answers,
-            self.room_overrides,
-            self.outdoor_overrides,
-            self.occupant_overrides,
-        )
+        answers.update(self.si_overrides or {})
         return answers
 
     # ================================================================
@@ -1405,10 +1382,10 @@ def _check_output_integrity(result: "QuoteResult", profile: "Profile") -> None:
             pass
 
     for label, attr in [
-        ("NRMA_DefaultExcess", "nrma_default_excess"),
-        ("NRMA_DefaultContentsExcess", "nrma_default_contents_excess"),
-        ("NRMAPlus_DefaultExcess", "nrma_plus_default_excess"),
-        ("NRMAPlus_DefaultContentsExcess", "nrma_plus_default_contents_excess"),
+        ("NRMA_DefaultExcess_Building", "nrma_default_excess"),
+        ("NRMA_DefaultExcess_Content", "nrma_default_contents_excess"),
+        ("NRMAPlus_DefaultExcess_Building", "nrma_plus_default_excess"),
+        ("NRMAPlus_DefaultExcess_Content", "nrma_plus_default_contents_excess"),
     ]:
         val = (getattr(result, attr, "") or "").strip()
         if not val:
@@ -1427,21 +1404,6 @@ def _check_output_integrity(result: "QuoteResult", profile: "Profile") -> None:
                 "standard excess tiers we request — possible parsing error",
                 profile.sample_number, label, tier,
             )
-
-
-class SumInsuredOutOfRange(ValueError):
-    """Raised when a target sum insured is outside the API's accepted range."""
-
-    def __init__(self, si_type, target, minimum, maximum, direction):
-        self.si_type = si_type  # "building" | "contents"
-        self.target = target
-        self.minimum = minimum
-        self.maximum = maximum
-        self.direction = direction  # "low" | "high"
-        super().__init__(
-            f"SumInsuredOutOfRange|{si_type}|{direction}|"
-            f"target={target}|min={minimum}|max={maximum}"
-        )
 
 
 def _validate_both_sum_insured(profile: Profile, resp: dict):
@@ -1476,155 +1438,6 @@ def _validate_both_sum_insured(profile: Profile, resp: dict):
         raise SumInsuredOutOfRange("contents", contents_sum, cnt_min, cnt_max, "low")
     if cnt_max and contents_sum > cnt_max:
         raise SumInsuredOutOfRange("contents", contents_sum, cnt_min, cnt_max, "high")
-
-
-# ── Room/outdoor/occupant adjustment strategies ────────────────────────────
-
-
-def _building_rooms_for_too_low(target_si: int) -> tuple[dict, dict, dict]:
-    """Minimise rooms + outdoor to push the building range lower."""
-    if target_si < 50000:
-        log.info(
-            "│  Strategy (building SI < $50k, too low): "
-            "1 small bed, 1 bath, rest=0, garage/carport=0"
-        )
-        rooms = {
-            "SmallBedrooms": "1",
-            "MediumBedrooms": "0",
-            "LargeBedrooms": "0",
-            "Bathrooms": "1",
-            "LivingSpaces": "0",
-            "DiningRooms": "0",
-        }
-    else:
-        log.info(
-            "│  Strategy (building SI >= $50k, too low): "
-            "1 small bed, 1 bath, 1 living, rest=0, garage/carport=0"
-        )
-        rooms = {
-            "SmallBedrooms": "1",
-            "MediumBedrooms": "0",
-            "LargeBedrooms": "0",
-            "Bathrooms": "1",
-            "LivingSpaces": "1",
-            "DiningRooms": "0",
-        }
-    outdoor = {
-        "ParkingSpacesCarport": "0",
-        "ParkingSpacesGarage": "0",
-        "InGroundPool": False,
-    }
-    return rooms, outdoor, {}
-
-
-def _building_rooms_for_too_high(
-    profile: Profile, target: int, maximum: int
-) -> tuple[dict, dict, dict]:
-    """Keep existing rooms, add large bedrooms to lift the building upper bound."""
-    difference = max(target - maximum, 0)
-    rate = SI_PER_LARGE_BEDROOM_BUILDING
-    additions = math.ceil(difference / rate) if rate > 0 else 1
-    additions = max(1, min(additions, MAX_LARGE_BEDROOM_ADDITIONS))
-
-    new_large = profile.large_bedrooms + additions
-    log.info(
-        f"│  Strategy (building too high): difference=${difference:,}, "
-        f"rate=${rate:,}/bedroom, adding {additions} large bedrooms "
-        f"({profile.large_bedrooms} → {new_large})"
-    )
-    rooms = {
-        "SmallBedrooms": str(profile.small_bedrooms),
-        "MediumBedrooms": str(profile.medium_bedrooms),
-        "LargeBedrooms": str(new_large),
-        "Bathrooms": str(profile.bathrooms),
-        "LivingSpaces": str(profile.living_rooms),
-        "DiningRooms": str(profile.dining_rooms),
-    }
-    return rooms, {}, {}
-
-
-def _contents_rooms_for_too_low(target_si: int) -> tuple[dict, dict, dict]:
-    """Minimise rooms + occupants to push the contents range lower."""
-    log.info(
-        "│  Strategy (contents too low): "
-        "1 small bed, 1 bath, 1 living, rest=0, adults=1, children=0"
-    )
-    rooms = {
-        "SmallBedrooms": "1",
-        "MediumBedrooms": "0",
-        "LargeBedrooms": "0",
-        "Bathrooms": "1",
-        "LivingSpaces": "1",
-        "DiningRooms": "0",
-    }
-    outdoor = {
-        "ParkingSpacesCarport": "0",
-        "ParkingSpacesGarage": "0",
-        "InGroundPool": False,
-    }
-    occupants = {
-        "AdultOccupants": 1,
-        "ChildOccupants": 0,
-    }
-    return rooms, outdoor, occupants
-
-
-def _contents_rooms_for_too_high(
-    profile: Profile, target: int, maximum: int
-) -> tuple[dict, dict, dict]:
-    """Keep existing rooms, add large bedrooms to lift the contents upper bound."""
-    difference = max(target - maximum, 0)
-    rate = SI_PER_LARGE_BEDROOM_CONTENTS
-    additions = math.ceil(difference / rate) if rate > 0 else 1
-    additions = max(1, min(additions, MAX_LARGE_BEDROOM_ADDITIONS))
-
-    new_large = profile.large_bedrooms + additions
-    log.info(
-        f"│  Strategy (contents too high): difference=${difference:,}, "
-        f"rate=${rate:,}/bedroom, adding {additions} large bedrooms "
-        f"({profile.large_bedrooms} → {new_large})"
-    )
-    rooms = {
-        "SmallBedrooms": str(profile.small_bedrooms),
-        "MediumBedrooms": str(profile.medium_bedrooms),
-        "LargeBedrooms": str(new_large),
-        "Bathrooms": str(profile.bathrooms),
-        "LivingSpaces": str(profile.living_rooms),
-        "DiningRooms": str(profile.dining_rooms),
-    }
-    return rooms, {}, {}
-
-
-def _calculate_si_adjustment(
-    profile: Profile, exc: SumInsuredOutOfRange
-) -> tuple[dict, dict, dict]:
-    """Pick the room/outdoor/occupant override for an out-of-range error.
-
-    Building SI is driven by rooms only; contents SI is driven by rooms AND
-    occupant counts, so the strategy branches on which product failed.
-    """
-    if exc.si_type == "contents":
-        if exc.direction == "low":
-            return _contents_rooms_for_too_low(exc.target)
-        return _contents_rooms_for_too_high(profile, exc.target, exc.maximum)
-    # building
-    if exc.direction == "low":
-        return _building_rooms_for_too_low(exc.target)
-    return _building_rooms_for_too_high(profile, exc.target, exc.maximum)
-
-
-def _populate_rerun_columns(
-    result: "QuoteResult",
-    room_overrides: Optional[dict],
-    occupant_overrides: Optional[dict],
-):
-    """Record the adjusted room/occupant values in the rerun output columns."""
-    if room_overrides:
-        result.rerun_small_bedrooms = str(room_overrides.get("SmallBedrooms", ""))
-        result.rerun_large_bedrooms = str(room_overrides.get("LargeBedrooms", ""))
-    if occupant_overrides:
-        result.rerun_adults = str(occupant_overrides.get("AdultOccupants", ""))
-        result.rerun_children = str(occupant_overrides.get("ChildOccupants", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1678,21 +1491,17 @@ def _find_matching_address(results, address, suburb, state, postcode):
 # ---------------------------------------------------------------------------
 async def _run_quote_attempt(
     profile: Profile,
-    zyte: ZyteSession,
+    session,
     result: QuoteResult,
-    room_overrides: Optional[dict],
-    outdoor_overrides: Optional[dict],
-    occupant_overrides: Optional[dict],
+    overrides: Optional[dict],
 ):
     """Run one full combined quote pass.
 
     Raises SumInsuredOutOfRange when either SI is out of range so the caller can
-    adjust rooms/occupants and retry; other failures propagate as-is.
+    adjust rooms and retry; other failures propagate as-is.
     """
-    client = NRMAClient(zyte)
-    client.room_overrides = room_overrides
-    client.outdoor_overrides = outdoor_overrides
-    client.occupant_overrides = occupant_overrides
+    client = NRMAClient(session)
+    client.si_overrides = overrides
 
     await client.step1_bootstrap(state=profile.state or "NSW")
     await client.step2_validate_entitlements()
@@ -1766,12 +1575,10 @@ async def _run_quote_attempt(
     )
 
 
-async def run_profile(
-    profile: Profile,
-    zyte: ZyteSession,
-) -> QuoteResult:
-
-    result = QuoteResult(
+def _new_result(profile: Profile) -> QuoteResult:
+    """A blank result stamped with the profile's identity — shared so a session
+    that dies before any quote work still writes a row the resume pass retries."""
+    return QuoteResult(
         sample_number=profile.sample_number,
         substate=profile.substate,
         dob_dd=str(profile.dob_dd),
@@ -1780,8 +1587,15 @@ async def run_profile(
         postcode=profile.postcode,
         quote_date=datetime.now().strftime("%d/%m/%Y"),
         timestamp=datetime.now().strftime("%H:%M"),
-        contents_sum_insured_used=str(profile.contents_sum_insured),
     )
+
+
+async def run_profile(
+    profile: Profile,
+    session,
+) -> QuoteResult:
+
+    result = _new_result(profile)
 
     log.info(
         "▶ profile=%s | %s, %s %s %s | type=%s building_si=$%s contents_si=$%s | "
@@ -1803,65 +1617,34 @@ async def run_profile(
         profile.occupancy_type,
     )
 
-    room_overrides: Optional[dict] = None
-    outdoor_overrides: Optional[dict] = None
-    occupant_overrides: Optional[dict] = None
-
-    # Attempt 1 = CSV values; each SI-out-of-range failure adjusts rooms/occupants
-    # and re-runs a fresh quote, up to MAX_SI_RETRIES extra attempts.
-    for attempt in range(1, MAX_SI_RETRIES + 2):
-        try:
-            await _run_quote_attempt(
-                profile,
-                zyte,
-                result,
-                room_overrides,
-                outdoor_overrides,
-                occupant_overrides,
-            )
-            _populate_rerun_columns(result, room_overrides, occupant_overrides)
-            log.info(
-                "✅ profile=%s done (attempt %d) | "
-                "NRMA yearly=%s (bldg excess %s / cont excess %s) | "
-                "NRMAPlus yearly=%s",
-                profile.sample_number,
-                attempt,
-                result.nrma_yearly or "-",
-                result.nrma_default_excess or "-",
-                result.nrma_default_contents_excess or "-",
-                result.nrma_plus_yearly or "-",
-            )
-            _check_output_integrity(result, profile)
-            return result
-
-        except SumInsuredOutOfRange as exc:
-            if attempt > MAX_SI_RETRIES:
-                _populate_rerun_columns(result, room_overrides, occupant_overrides)
-                result.failure_reason = str(exc)[:500]
-                log.error(
-                    "❌ profile=%s SI out of range after %d attempts: %s",
-                    profile.sample_number,
-                    attempt,
-                    exc,
-                )
-                _check_output_integrity(result, profile)
-                return result
-
-            room_overrides, outdoor_overrides, occupant_overrides = (
-                _calculate_si_adjustment(profile, exc)
-            )
-            log.info(
-                "⚠ profile=%s %s SI %s — retrying with adjusted rooms/occupants",
-                profile.sample_number,
-                exc.si_type,
-                exc.direction,
-            )
-
-        except Exception as exc:
-            result.failure_reason = str(exc)[:500]
-            log.error("❌ profile=%s FAILED: %s", profile.sample_number, exc)
-            _check_output_integrity(result, profile)
-            return result
+    # Attempt 1 = CSV values; out of range, si_steps re-quotes Suncorp's way
+    # (building SI checked first).
+    try:
+        await quote_si(
+            lambda overrides: _run_quote_attempt(
+                profile, session, result, overrides
+            ),
+            profile,
+            result,
+            SI_FIELDS,
+        )
+        log.info(
+            "✅ profile=%s done (rerun %s) | "
+            "NRMA yearly=%s (bldg excess %s / cont excess %s) | "
+            "NRMAPlus yearly=%s",
+            profile.sample_number,
+            result.rerun or "-",
+            result.nrma_yearly or "-",
+            result.nrma_default_excess or "-",
+            result.nrma_default_contents_excess or "-",
+            result.nrma_plus_yearly or "-",
+        )
+    except SumInsuredOutOfRange as exc:  # the range for the home as described
+        result.failure_reason = str(exc)[:500]
+        log.error("❌ profile=%s SI out of range: %s", profile.sample_number, exc)
+    except Exception as exc:
+        result.failure_reason = str(exc)[:500]
+        log.error("❌ profile=%s FAILED: %s", profile.sample_number, exc)
 
     _check_output_integrity(result, profile)
     return result
@@ -1924,64 +1707,56 @@ async def _collect_main(
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
+# Column names and order are the client's delivery template (Suncorp, 2026-10-22),
+# plus a Rerun_ column per lookup Yes field after the template's three (Suncorp,
+# 2026-10-29). test_template_columns.py pins both to the period's files.
 MAIN_FIELDS = [
     "Sample_Number",
-    "Substate",
     "DOB_DD",
     "DOB_MM",
     "DOB_YYYY",
     "Postcode",
     "QuoteDate",
-    "Timestamp",
+    "Timestamp (in hh:mm)",
     "QuoteLink",
     "QuoteNumber",
-    "NRMA_DefaultExcess",
-    "NRMA_DefaultContentsExcess",
+    "NRMA_DefaultExcess_Building",
+    "NRMA_DefaultExcess_Content",
     "NRMA_YearlyPayment",
-    "NRMAPlus_DefaultExcess",
-    "NRMAPlus_DefaultContentsExcess",
+    "NRMAPlus_DefaultExcess_Building",
+    "NRMAPlus_DefaultExcess_Content",
     "NRMAPlus_YearlyPayment",
     "NRMA_Base_Prem",
     "NRMA_GST",
     "NRMA_Stamp_Duty",
     "NRMA_ESL",
-    "Contents_Sum_Insured_Used",
     "Reason_for_quote_failure",
-    "Rerun_Small_Bedrooms",
-    "Rerun_Large_Bedrooms",
-    "Rerun_Adults",
-    "Rerun_Children",
-]
+] + [f"Rerun_{f}" for f in SI_FIELDS]
 
 
 def to_main_row(r: QuoteResult) -> dict:
     return {
         "Sample_Number": r.sample_number,
-        "Substate": r.substate,
         "DOB_DD": r.dob_dd,
         "DOB_MM": r.dob_mm,
         "DOB_YYYY": r.dob_yyyy,
         "Postcode": r.postcode,
         "QuoteDate": r.quote_date,
-        "Timestamp": r.timestamp,
+        "Timestamp (in hh:mm)": r.timestamp,
         "QuoteLink": r.quote_link,
         "QuoteNumber": r.quote_number,
-        "NRMA_DefaultExcess": r.nrma_default_excess,
-        "NRMA_DefaultContentsExcess": r.nrma_default_contents_excess,
+        "NRMA_DefaultExcess_Building": r.nrma_default_excess,
+        "NRMA_DefaultExcess_Content": r.nrma_default_contents_excess,
         "NRMA_YearlyPayment": r.nrma_yearly,
-        "NRMAPlus_DefaultExcess": r.nrma_plus_default_excess,
-        "NRMAPlus_DefaultContentsExcess": r.nrma_plus_default_contents_excess,
+        "NRMAPlus_DefaultExcess_Building": r.nrma_plus_default_excess,
+        "NRMAPlus_DefaultExcess_Content": r.nrma_plus_default_contents_excess,
         "NRMAPlus_YearlyPayment": r.nrma_plus_yearly,
         "NRMA_Base_Prem": r.nrma_base_prem,
         "NRMA_GST": r.nrma_gst,
         "NRMA_Stamp_Duty": r.nrma_stamp_duty,
         "NRMA_ESL": r.nrma_esl,
-        "Contents_Sum_Insured_Used": r.contents_sum_insured_used,
         "Reason_for_quote_failure": r.failure_reason,
-        "Rerun_Small_Bedrooms": r.rerun_small_bedrooms,
-        "Rerun_Large_Bedrooms": r.rerun_large_bedrooms,
-        "Rerun_Adults": r.rerun_adults,
-        "Rerun_Children": r.rerun_children,
+        **{f"Rerun_{f}": r.rerun.get(f, "") for f in SI_FIELDS},
     }
 
 
@@ -1997,7 +1772,8 @@ def _row_is_complete(row: dict) -> bool:
     """
     reason = (row.get("Reason_for_quote_failure") or "").strip()
     if reason:
-        return reason.startswith("SumInsuredOutOfRange") or reason.startswith("No address found:") or reason.startswith("Could not provide estimates for this property")  or reason.startswith("We don't cover properties in your area")
+        # One definition of a real answer, shared with the breaker and delivery.
+        return reason.startswith(TERMINAL_REASON_PREFIXES)
     return bool((row.get("NRMA_YearlyPayment") or "").strip())
 
 
@@ -2043,19 +1819,128 @@ class CSVWriter:
 # ---------------------------------------------------------------------------
 # Worker + main
 # ---------------------------------------------------------------------------
+# Session handling below is contents.py's, verbatim in behaviour — the reasoning
+# (and the measurements behind the 403 wait and the three-way breaker) lives
+# there and in Decisions.md 2026-09-09/10. Keep the two in step.
+BAN_RETRY_ATTEMPTS = int(os.getenv("BAN_RETRY_ATTEMPTS", "3"))
+RATE_LIMIT_BACKOFF = (
+    float(os.getenv("RATE_LIMIT_BACKOFF_MIN", "30")),
+    float(os.getenv("RATE_LIMIT_BACKOFF_MAX", "75")),
+)
+START_JITTER_SECONDS = float(os.getenv("START_JITTER_SECONDS", "20"))
+PROFILE_DELAY = float(os.getenv("NRMA_PROFILE_DELAY", "0"))
+# Refusals that need time to decay, not just a new exit IP (403 included —
+# measured, not reasoned: contents.py 2026-09-10).
+_RATE_LIMIT_MARKERS = ("→ 429", "DynaCop", "→ 403", "Access Denied")
+# Refusals of the session or exit IP, worth a fresh browser on a fresh IP.
+_RETRYABLE_MARKERS = (
+    "Access Denied", "→ 403", "→ 401", "→ 429", "AkamaiNotValidated",
+    "BrowserSessionFailed", "NetworkError", "NS_ERROR_", "has been closed",
+    "Connection closed", "Timeout",
+)
+
+
+def _is_rate_limited(result: QuoteResult) -> bool:
+    reason = result.failure_reason or ""
+    return any(m in reason for m in _RATE_LIMIT_MARKERS)
+
+
+def _should_retry_on_new_session(result: QuoteResult) -> bool:
+    """True when the row failed because of the session, not on the merits."""
+    reason = result.failure_reason or ""
+    return bool(reason) and any(m in reason for m in _RETRYABLE_MARKERS)
+
+
+async def _run_one_session(profile: Profile) -> QuoteResult:
+    """Run a profile on one fresh Akamai-validated browser session."""
+    try:
+        async with quote_session(profile.state or "NSW") as session:
+            return await run_profile(profile, session)
+    except AkamaiNotValidated as exc:
+        result = _new_result(profile)
+        result.failure_reason = str(exc)[:500]
+        log.error("❌ profile=%s %s", profile.sample_number, exc)
+        return result
+    except Exception as exc:  # browser launch / navigation failure
+        result = _new_result(profile)
+        result.failure_reason = f"BrowserSessionFailed: {redact(exc)}"[:500]
+        log.error("❌ profile=%s browser session failed: %s", profile.sample_number, redact(exc))
+        return result
+
+
+# Consecutive profiles lost to an Akamai 403. Three-way on purpose: a 403
+# counts up, only a real answer resets, transport noise leaves it alone.
+_block_streak = 0
+_halt = asyncio.Event()
+
+
+def _note_outcome(result: QuoteResult) -> None:
+    global _block_streak
+    reason = result.failure_reason or ""
+    if is_bot_block(reason):
+        _block_streak += 1
+    elif not reason or reason.startswith(TERMINAL_REASON_PREFIXES):
+        _block_streak = 0
+        return
+    else:
+        return
+    if _block_streak >= BLOCK_STREAK_LIMIT and not _halt.is_set():
+        hours = start_cooldown()
+        _halt.set()
+        log.error(
+            "⛔ %d profiles bot-blocked with no quote getting through in "
+            "between — halting this run and backing off %.0fmin. Nothing is "
+            "lost: every one of them is still pending for the next pass. "
+            "Delete %s to resume sooner.",
+            _block_streak, hours * 60, COOLDOWN_FILE,
+        )
+
+
 async def worker(
     profile: Profile,
-    zyte: ZyteSession,
     writer: CSVWriter,
     sem: asyncio.Semaphore,
     progress: dict,
 ):
     async with sem:
-        result = await run_profile(profile, zyte)
+        # Breaker tripped here or in a sibling scraper: leave the rest pending.
+        if _halt.is_set() or cooldown_hours_left():
+            return
+        if CONCURRENCY > 1 and START_JITTER_SECONDS:
+            await asyncio.sleep(random.uniform(0, START_JITTER_SECONDS))
+        if PROFILE_DELAY:
+            await asyncio.sleep(PROFILE_DELAY)
+
+        # One validated session per profile; a refusal takes a whole new
+        # browser and exit IP.
+        for attempt in range(1, BAN_RETRY_ATTEMPTS + 1):
+            result = await _run_one_session(profile)
+            if not _should_retry_on_new_session(result):
+                break
+            if attempt < BAN_RETRY_ATTEMPTS:
+                delay = (
+                    random.uniform(*RATE_LIMIT_BACKOFF)
+                    if _is_rate_limited(result)
+                    else random.uniform(1, 4)
+                )
+                log.warning(
+                    "⚠ profile=%s session refused on attempt %d/%d — "
+                    "waiting %.0fs then retrying on a fresh IP | %s",
+                    profile.sample_number, attempt, BAN_RETRY_ATTEMPTS, delay,
+                    result.failure_reason[:100],
+                )
+                await asyncio.sleep(delay)
+        if _should_retry_on_new_session(result):
+            log.error(
+                "❌ profile=%s gave up after %d attempts — left for the next "
+                "resume pass | %s",
+                profile.sample_number, BAN_RETRY_ATTEMPTS, result.failure_reason[:120],
+            )
+        _note_outcome(result)
         await writer.write(to_main_row(result))
         progress["done"] += 1
         log.info(
-            "Progress: %d/%d (%.1f%%)",
+            "Progress [combined]: %d/%d (%.1f%%)",
             progress["done"],
             progress["total"],
             100 * progress["done"] / progress["total"],
@@ -2065,34 +1950,55 @@ async def worker(
 async def main():
     log.info("=== NRMA Combined Scraper | CONCURRENCY=%d ===", CONCURRENCY)
 
-    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as http:
-        zyte = ZyteSession(http)
-        sem = asyncio.Semaphore(CONCURRENCY)
-
-        main_profiles = load_profiles(INPUT_MAIN_CSV)
-
-        # ── Idempotent resume: skip samples already collected properly ──────
-        if FORCE_RERUN:
-            done, keep = set(), []
-            log.info("FORCE_RERUN set — ignoring existing output, scraping all")
-        else:
-            done, keep = load_completed(OUTPUT_MAIN_CSV)
-        pending = [p for p in main_profiles if p.sample_number not in done]
-        log.info(
-            "MAIN resume: %d already collected, %d pending of %d total",
-            len(done),
-            len(pending),
-            len(main_profiles),
+    # Same gate as the other two scrapers: the cooldown is shared because the
+    # reputation is, and exiting is what makes the breaker stick against cron.
+    resting = cooldown_hours_left()
+    if resting:
+        log.error(
+            "⛔ account resting after a bot-block streak — %.1fh left. "
+            "Delete %s to override.",
+            resting,
+            COOLDOWN_FILE,
         )
+        return
 
-        main_writer = CSVWriter(OUTPUT_MAIN_CSV, MAIN_FIELDS, preserve_rows=keep)
+    if not INPUT_MAIN_CSV:
+        log.error(
+            "no Combined input for period %s (%s) — drop the CSV into "
+            "%s and check with `python period.py`",
+            period.PERIOD or "?", period.PERIOD_SOURCE, period.data_dir("NRMA"),
+        )
+        return
 
-        if pending:
-            prog_main = {"done": 0, "total": len(pending)}
-            await asyncio.gather(
-                *[worker(p, zyte, main_writer, sem, prog_main) for p in pending]
-            )
-        log.info("MAIN done → %s", OUTPUT_MAIN_CSV)
+    sem = asyncio.Semaphore(CONCURRENCY)
+    main_profiles = load_profiles(INPUT_MAIN_CSV)
+
+    # ── Idempotent resume: skip samples already collected properly ──────
+    if FORCE_RERUN:
+        done, keep = set(), []
+        log.info("FORCE_RERUN set — ignoring existing output, scraping all")
+    else:
+        done, keep = load_completed(OUTPUT_MAIN_CSV)
+    pending = [p for p in main_profiles if p.sample_number not in done]
+    # Input order puts the samples that failed last pass at the head of every
+    # resume; ten of those in a row trip the breaker before a fresh sample is
+    # tried (the 2026-10-16 stall). Shuffled, they are spread through the run.
+    random.shuffle(pending)
+    log.info(
+        "MAIN resume: %d already collected, %d pending of %d total",
+        len(done),
+        len(pending),
+        len(main_profiles),
+    )
+
+    main_writer = CSVWriter(OUTPUT_MAIN_CSV, MAIN_FIELDS, preserve_rows=keep)
+
+    if pending:
+        prog_main = {"done": 0, "total": len(pending)}
+        await asyncio.gather(
+            *[worker(p, main_writer, sem, prog_main) for p in pending]
+        )
+    log.info("MAIN done → %s", OUTPUT_MAIN_CSV)
 
 
 if __name__ == "__main__":

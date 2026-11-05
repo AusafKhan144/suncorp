@@ -100,6 +100,10 @@ CLICK_TIMEOUT_MS = int(os.getenv("NRMA_UI_CLICK_TIMEOUT_MS", "8000"))
 
 NEXT = "[data-testid=next-button]"
 BACK = "[data-testid=back-button]"
+# Since Oct 2026 the journey opens on /3/welcome: log in, or continue as guest.
+# It has no form control, and only the guest click mints the quote (POST
+# home/quote, the anonymous token, then validateEntitlements → 200).
+GUEST = "[data-testid=continue-as-guest-button]"
 
 # Collects every visible control on the current step, descending shadow roots.
 # `name` is the interesting one — it is the API answer key.
@@ -287,6 +291,11 @@ class UIJourney:
         )
         await self.page.goto(url, wait_until="load", timeout=NAV_TIMEOUT_MS)
         await self.wait_rendered()
+        guest = self.page.locator(GUEST)
+        if await guest.count():
+            await guest.click(timeout=CLICK_TIMEOUT_MS)
+            await guest.wait_for(state="detached", timeout=RENDER_TIMEOUT_MS)
+            await self.wait_rendered()
         self.quote_id = await self.detect_quote_id()
         if not self.quote_id:
             raise UIFlowError("no quoteId after landing on the journey")
@@ -308,7 +317,8 @@ class UIJourney:
         try:
             await self.page.wait_for_function(
                 "() => document.querySelectorAll("
-                "'input,select,[role=radio],[data-testid=next-button]').length > 0",
+                "'input,select,[role=radio],[data-testid=next-button],"
+                "[data-testid=continue-as-guest-button]').length > 0",
                 timeout=RENDER_TIMEOUT_MS,
             )
         except Exception as exc:

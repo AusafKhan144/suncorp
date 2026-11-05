@@ -22,17 +22,19 @@ building.py / contents.py / combined.py — same signature, same 4-tuple return 
 so the scrapers' step methods, payload builders and extractors are unchanged.
 """
 
+import asyncio
 import base64
 import html
 import json
 import logging
 import os
+import random
 import re
 import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -222,7 +224,30 @@ OXY_COUNTRY = os.getenv("OXY_COUNTRY", "au")
 # would rather not put in NRMA's logs at volume, so a proxy is always preferred
 # when one works. Measured 2026-09-11: none of them did (403 on the protected
 # POST from all three providers, 200 direct), which is why it exists at all.
-PROXY_POOLS = ("iproyal", "oxylabs", "goproxies", "direct")
+#
+# "mobile" is FIRST: AU 4G/5G carrier IPs bought 2026-10-16 after the A/B showed
+# the block is per exit IP and hits the app's own JS too. Any provider works:
+# one line in secrets.conf, in the shape its docs give, with `{session}` where
+# its sticky-session id goes (percent-encode @ : / inside the password), e.g.
+#   MOBILE_PROXY_URL=http://customer-USER-cc-au-sessid-{session}:PASS@host:7777
+# Unset, the pool does not exist and nothing below changes.
+MOBILE_PROXY_URL = secret("MOBILE_PROXY_URL")
+# A "-cc" suffix picks a country on the same plan: "iproyal-gb" is iProyal's UK
+# space, with its own cooldown file. 2026-10-16, our own flow on fresh IPs: AU 0/3
+# and NZ 0/3 priced, UK 4/9 and US 1/3. Premiums re-priced from the UK matched
+# the AU ones to the cent, so NRMA neither geo-prices nor geo-blocks: weeks of
+# volume burnt the AU space, and every other country is a fresh reputation.
+PROXY_POOLS = ("mobile", "iproyal-gb", "oxylabs-gb", "iproyal-us", "oxylabs-us",
+               "iproyal", "oxylabs", "goproxies", "direct")
+# What an unattended launch (launch_free_pool.py — the card's relaunch) may pick:
+# every pool but direct. 2026-10-07: with all three proxies resting, the 22:00
+# tick fell through to direct and three unpaced scrapers sat on the office IP
+# for 46h, bot-flagged at bootstrap on every profile — zero rows. Direct only
+# works paced and alone (NRMA_PROXY_PROVIDER=direct NRMA_PROFILE_DELAY=90, as on
+# 2026-09-22), so it stays a deliberate, hand-started choice.
+UNATTENDED_POOLS = tuple(
+    p for p in PROXY_POOLS if p != "direct" and (p != "mobile" or MOBILE_PROXY_URL)
+)
 PROXY_PROVIDER = os.getenv("NRMA_PROXY_PROVIDER", "oxylabs").strip().lower()
 GOPROXY_USER = secret("GOPROXY_USER")
 GOPROXY_PASS = secret("GOPROXY_PASS")
@@ -350,11 +375,60 @@ def cooldown_file(provider: str) -> str:
 # reader and deliberately does not consult it.
 COOLDOWN_FILE = cooldown_file(PROXY_PROVIDER)
 
-_BLOCK_MARKERS = ("Access Denied", "→ 403", "Akamai bot block")
+# AkamaiNotValidated counts too. It reaches the breaker only after a profile's
+# 3 sessions x 3 bootstraps ALL failed, so it is a block, not a flaky exit — and
+# leaving it neutral is what let the 2026-10-07 office-IP wall (`_abck ~-1~` on
+# every bootstrap) sweep ~2,400 profiles over 46h without ever tripping. It still
+# never *resets* the streak; only a real answer does (the 2026-09-09 rule).
+_BLOCK_MARKERS = ("Access Denied", "→ 403", "Akamai bot block", "AkamaiNotValidated")
+
+
+_PROXY_AUTH = re.compile(r"(\w+://)[^/\s@]+@")
+
+
+def redact(text) -> str:
+    """Drop user:pass from any URL in an error before it is logged or written.
+
+    Playwright's "Failed to connect to proxy: http://user:pass@host" echoes the
+    whole proxy URL: by 2026-10-13 scraper.log held the GoProxies password on
+    80,360 lines, and the same text lands in the CSV's failure reason.
+    """
+    return _PROXY_AUTH.sub(r"\1<redacted>@", str(text))
+
+
+# DynaCop answers a burst of price PUTs with 429 "SIMPLE: DynaCop blocked
+# request", a throttle that clears in seconds (unlike Akamai's 403). The toggle
+# excess sweep fires ~26 PUTs back to back. Until 2026-10-19 each 429 was caught
+# per tier and left a blank ladder cell on a row that still counted as priced:
+# 90 of 91 Buildings toggle rows of 202611 had an empty or partial ladder.
+SWEEP_PAUSE = (
+    float(os.getenv("NRMA_SWEEP_PAUSE_MIN", "1.5")),
+    float(os.getenv("NRMA_SWEEP_PAUSE_MAX", "3")),
+)
+SWEEP_429_WAITS = (10, 20, 40, 80)
+
+
+async def sweep_call(call):
+    """One excess-sweep request: pause first, then ride out DynaCop 429s.
+
+    Any other error, and a 429 that outlasts the waits, propagates: a toggle row
+    with a hole in its ladder must fail and come back, never ship.
+    """
+    await asyncio.sleep(random.uniform(*SWEEP_PAUSE))
+    for wait in SWEEP_429_WAITS:
+        try:
+            return await call()
+        except RuntimeError as exc:
+            if "→ 429" not in str(exc):
+                raise
+            log.info("│  DynaCop 429 mid-sweep — waiting %ds", wait)
+            await asyncio.sleep(wait)
+    return await call()
 
 
 def is_bot_block(reason: str | None) -> bool:
-    """True for an Akamai 403 refusal, in either the raw or shortened wording."""
+    """True for an Akamai refusal: a 403 (raw or shortened wording), or a
+    session Akamai never validated at all."""
     return any(m in (reason or "") for m in _BLOCK_MARKERS)
 
 
@@ -447,22 +521,31 @@ def _proxy_config(sid: str) -> dict | None:
     """Per-quote proxy config; the session id pins this quote to one exit IP."""
     if not PROXY_ENABLED or PROXY_PROVIDER == "direct":
         return None
-    if PROXY_PROVIDER == "iproyal":
+    provider, _, cc = PROXY_PROVIDER.partition("-")  # "iproyal-gb" → UK space
+    cc = cc or OXY_COUNTRY
+    if provider == "mobile":
+        u = urlsplit(MOBILE_PROXY_URL.replace("{session}", sid))
+        return {
+            "server": f"{u.scheme}://{u.hostname}:{u.port}",
+            "username": unquote(u.username or ""),
+            "password": unquote(u.password or ""),
+        }
+    if provider == "iproyal":
         return {
             "server": f"http://{IPROYAL_HOST}:{IPROYAL_PORT}",
             "username": IPROYAL_USER,
-            "password": (f"{IPROYAL_PASS}_country-{OXY_COUNTRY}"
+            "password": (f"{IPROYAL_PASS}_country-{cc}"
                          f"_session-{sid}_lifetime-{IPROYAL_LIFETIME}"),
         }
-    if PROXY_PROVIDER == "goproxies":
+    if provider == "goproxies":
         return {
             "server": f"http://{GOPROXY_HOST}:{GOPROXY_PORT}",
-            "username": f"{GOPROXY_USER}-country-{OXY_COUNTRY}-sessionid-{sid}",
+            "username": f"{GOPROXY_USER}-country-{cc}-sessionid-{sid}",
             "password": GOPROXY_PASS,
         }
     return {
         "server": f"http://{OXY_HOST}:{OXY_PORT}",
-        "username": f"customer-{OXY_USER}-cc-{OXY_COUNTRY}-sessid-{sid}",
+        "username": f"customer-{OXY_USER}-cc-{cc}-sessid-{sid}",
         "password": OXY_PASS,
     }
 

@@ -35,7 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Directory name -> the tag that insurer uses inside CSV filenames.
 INSURERS = {"NRMA": "NRMA", "Youi": "YOUI", "RACV": "RACV"}
-PRODUCTS = ("Buildings", "Contents", "Motor")
+PRODUCTS = ("Buildings", "Contents", "Combined", "Motor")
 
 _PERIOD_RE = re.compile(r"^\d{6}$")
 
@@ -122,9 +122,9 @@ def stem(insurer: str, product: str, kind: str = "main") -> str | None:
     return os.path.basename(src)[:-4] if src else None
 
 
-def chunks_glob(insurer: str, product: str) -> str | None:
+def chunks_glob(insurer: str, product: str, kind: str = "main") -> str | None:
     """Youi fans out over pre-split chunks; chunkify.py writes them."""
-    name = stem(insurer, product)
+    name = stem(insurer, product, kind)
     return os.path.join(data_dir(insurer), "chunks", f"{name}_chunk_*.csv") if name else None
 
 
@@ -144,13 +144,14 @@ def report() -> int:
     missing = 0
     for insurer in INSURERS:
         for product in PRODUCTS:
-            src, dst = input_csv(insurer, product), output_csv(insurer, product)
-            if not src:
-                continue
-            chunks = len(glob.glob(chunks_glob(insurer, product) or ""))
-            print(f"  {insurer:5} {product:10} in {_rows(src):>5}  out {_rows(dst):>5}"
-                  f"{f'  chunks {chunks}' if chunks else ''}   {os.path.basename(src)}")
-            missing += not os.path.exists(src)
+            for kind in ("main", "toggle"):
+                src, dst = input_csv(insurer, product, kind), output_csv(insurer, product, kind)
+                if not src:
+                    continue
+                chunks = len(glob.glob(chunks_glob(insurer, product, kind) or ""))
+                print(f"  {insurer:5} {product:10} in {_rows(src):>5}  out {_rows(dst):>5}"
+                      f"{f'  chunks {chunks}' if chunks else ''}   {os.path.basename(src)}")
+                missing += not os.path.exists(src)
     if not any(input_csv(i, p) for i in INSURERS for p in PRODUCTS):
         print(f"  nothing in inputs/{PERIOD}/data — is the drop complete?")
         return 1
@@ -178,7 +179,10 @@ def _selftest() -> int:
                       "Buildings_NRMA_monthly_202609_main.csv"):
                 open(os.path.join(nrma, n), "w").close()
             youi = os.path.join(tmp, "Youi", "inputs", "202609", "data")
-            open(os.path.join(youi, "Motor_YOUI_monthly_202609.csv"), "w").close()
+            for n in ("Motor_YOUI_monthly_202609.csv",
+                      "Combined_YOUI_quarterly_202609.csv",
+                      "Buildings_YOUI_quarterly_202609_toggle.csv"):
+                open(os.path.join(youi, n), "w").close()
 
             # Read, never built: the cadence word comes back as dropped.
             assert input_csv("NRMA", "Contents").endswith("Contents_NRMA_monthly_202609_main.csv")
@@ -193,6 +197,13 @@ def _selftest() -> int:
             assert output_csv("NRMA", "Motor") is None
             assert stem("NRMA", "Contents") == "Contents_NRMA_monthly_202609_main"
             assert chunks_glob("Youi", "Motor").endswith("Motor_YOUI_monthly_202609_chunk_*.csv")
+            # Quarterly extras: Combined has no suffix, and a toggle-only drop
+            # must never be taken for the main file (run_youi.py would crawl it).
+            assert input_csv("Youi", "Combined").endswith("Combined_YOUI_quarterly_202609.csv")
+            assert input_csv("Youi", "Combined", "toggle") is None
+            assert input_csv("Youi", "Buildings") is None
+            assert chunks_glob("Youi", "Buildings", "toggle").endswith(
+                "Buildings_YOUI_quarterly_202609_toggle_chunk_*.csv")
 
             PERIOD = ""
             assert input_csv("NRMA", "Contents") is None  # nothing dropped: no crash
