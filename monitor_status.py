@@ -6,9 +6,9 @@ Youi/home/monitor_status.py) — same NRMA card format, both runs in it.
 
 Counts the output CSVs (the scrapers' only checkpoint), reports per-product
 progress, and relaunches a scraper that has died with work still pending.
-Youi is fanned out by run_youi.py across 20 runner.py processes, so it is
-reported but never relaunched from here — restarting it means re-running the
-orchestrator, which resumes from the same CSVs.
+Youi home is one run_youi.py fan-out (50 runner.py processes on a quarterly
+drop), so it is relaunched as a group by re-running the orchestrator, which
+resumes from the same CSVs.
 
 The webhook URL is read from (in order): env MONITOR_WEBHOOK_URL, then the
 first CONFS entry with a line starting http. If none is set it prints the
@@ -24,6 +24,7 @@ import datetime
 import glob
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -69,6 +70,18 @@ def strike_count(prev_entry: dict, wedged: bool) -> int:
     return ((prev_entry or {}).get("wedged", 0) + 1) if wedged else 0
 
 
+def hold_until(hold_h: float, last: dict, done: int) -> float:
+    """Epoch before which relaunching is not worth it, else 0.
+
+    A hold starts only when the last relaunch landed nothing — done has not
+    moved past what it was at that relaunch — and any new row lifts it.
+    """
+    since = last.get("relaunch_done")
+    if not hold_h or since is None or not last.get("recovered_ts") or done > since:
+        return 0
+    return last["recovered_ts"] + hold_h * 3600
+
+
 def stalled(s: dict, remaining: int) -> bool:
     """No new row in STALL_MIN while work is still outstanding.
 
@@ -98,7 +111,7 @@ class Job:
 
     def __init__(self, insurer, product, inp, outp, paid, pattern,
                  script=None, terminal_prefixes=None, cwd=None,
-                 kill_patterns=None, group=None):
+                 kill_patterns=None, group=None, hold_h=0):
         self.insurer, self.product = insurer, product
         # Card rows show the product alone (the insurer heads its block), but
         # state and alerts keep the qualified name so they stay unambiguous.
@@ -112,6 +125,8 @@ class Job:
         self.cwd = cwd
         self.kill_patterns = kill_patterns or (pattern,)
         self.group = group or self.label
+        # Hours to wait after a relaunch that landed nothing; 0 = every tick.
+        self.hold_h = hold_h
 
 
 # Every path comes from period.py: it resolves the period and reads each
@@ -127,32 +142,65 @@ def _job(insurer, product, **kw):
                period.output_csv(insurer, product) or "", **kw)
 
 
+# Hours a Youi relaunch that landed nothing waits before the next one. The
+# 202611 gaps were Youi's SMS-PIN gate on 7 samples, and retrying them every 2h
+# tick is the opposite of letting them cool off. NRMA keeps 0 (every tick): its
+# breaker and pool cooldowns already pace it, and a hold would cost it windows.
+YOUI_HOLD_H = 24
+
+
+def _youi_home(product, source, kind, crawler):
+    """One config of the run_youi.py fan-out, counted against its input chunks."""
+    return Job("Youi", product,
+               period.chunks_glob("Youi", source, kind) or "",
+               period.output_csv("Youi", source, kind) or "",
+               paid="QuoteNumber", pattern=f"[r]unner.py {crawler}",
+               script="run_youi.py", cwd=HERE, group="youi",
+               kill_patterns=("[r]un_youi.py", "[r]unner.py"), hold_h=YOUI_HOLD_H)
+
+
 JOBS = [
     _job("NRMA", "Buildings",
          paid="NRMA_YearlyPayment", pattern="[b]uilding.py",
          script="launch_free_pool.py building.py",
-         terminal_prefixes=TERMINAL_REASON_PREFIXES),
+         terminal_prefixes=TERMINAL_REASON_PREFIXES, group="nrma-buildings"),
     _job("NRMA", "Contents",
          paid="NRMA_YearlyPayment", pattern="[c]ontents.py",
          script="launch_free_pool.py contents.py",
-         terminal_prefixes=TERMINAL_REASON_PREFIXES),
+         terminal_prefixes=TERMINAL_REASON_PREFIXES, group="nrma-contents"),
+    # Quarterly only. A toggle is the second stage of its own scraper, so it
+    # shares that scraper's group: one relaunch per tick, and rows landing in
+    # the toggle keep its main from reading as wedged.
+    Job("NRMA", "Bldg toggle",
+        period.input_csv("NRMA", "Buildings", "toggle") or "",
+        period.output_csv("NRMA", "Buildings", "toggle") or "",
+        paid="NRMA_YearlyPayment", pattern="[b]uilding.py",
+        script="launch_free_pool.py building.py",
+        terminal_prefixes=TERMINAL_REASON_PREFIXES, group="nrma-buildings"),
+    Job("NRMA", "Cont toggle",
+        period.input_csv("NRMA", "Contents", "toggle") or "",
+        period.output_csv("NRMA", "Contents", "toggle") or "",
+        paid="NRMA_YearlyPayment", pattern="[c]ontents.py",
+        script="launch_free_pool.py contents.py",
+        terminal_prefixes=TERMINAL_REASON_PREFIXES, group="nrma-contents"),
+    # Combined runs alongside the other two (user's call 2026-10-07, reversing
+    # "after the mains" the same day) and is relaunched like them when it dies.
+    _job("NRMA", "Combined",
+         paid="NRMA_YearlyPayment", pattern="[c]ombined.py",
+         script="launch_free_pool.py combined.py",
+         terminal_prefixes=TERMINAL_REASON_PREFIXES, group="nrma-combined"),
     # Youi home is counted against its input *chunks*, because run_youi.py fans
     # the drop out across them and the un-chunked master is not what runs.
     # Orchestrator first in kill_patterns: it respawns runners, so killing a
-    # runner while run_youi.py lives just gets it replaced. Both products name
-    # the same group so a tick recovers the fan-out once, not twice.
-    Job("Youi", "Buildings",
-        period.chunks_glob("Youi", "Buildings") or "",
-        period.output_csv("Youi", "Buildings") or "",
-        paid="QuoteNumber", pattern="[r]unner.py buildings",
-        script="run_youi.py", cwd=HERE, group="youi",
-        kill_patterns=("[r]un_youi.py", "[r]unner.py")),
-    Job("Youi", "Contents",
-        period.chunks_glob("Youi", "Contents") or "",
-        period.output_csv("Youi", "Contents") or "",
-        paid="QuoteNumber", pattern="[r]unner.py contents",
-        script="run_youi.py", cwd=HERE, group="youi",
-        kill_patterns=("[r]un_youi.py", "[r]unner.py")),
+    # runner while run_youi.py lives just gets it replaced. Every config names
+    # the same group so a tick recovers the fan-out once, not five times.
+    _youi_home("Buildings", "Buildings", "main", "buildings"),
+    _youi_home("Contents", "Contents", "main", "contents"),
+    # Quarterly drops only: a monthly one has no input for these, so they stay
+    # off the card. Short labels so they fit the 12-char column.
+    _youi_home("Bldg toggle", "Buildings", "toggle", "buildings_toggle"),
+    _youi_home("Cont toggle", "Contents", "toggle", "contents_toggle"),
+    _youi_home("Combined", "Combined", "main", "combined"),
     # Motor is its own entry point, not part of the run_youi.py home fan-out,
     # so it gets its own group. It stays report-only (script=None) because
     # run_motors_v2.py still carries its own hardcoded period.
@@ -271,15 +319,25 @@ def running(pattern: str) -> bool:
     open. A false "alive" is the most expensive wrong answer this function can
     give, so it matches argv elements instead of a substring.
     """
+    return bool(_matching_pids(pattern))
+
+
+def _matching_pids(pattern: str) -> list[int]:
+    """PIDs of interpreters actually running the script (argv match, as above)."""
     tokens = pattern.replace("[", "").replace("]", "").split()
     if not tokens:
-        return False
+        return []
     try:
-        out = subprocess.run(["ps", "-eo", "args="],
+        out = subprocess.run(["ps", "-eo", "pid=,args="],
                              capture_output=True, text=True).stdout
     except Exception:
-        return False
-    return any(_argv_matches(line, tokens) for line in out.splitlines())
+        return []
+    pids = []
+    for line in out.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if pid.isdigit() and int(pid) != os.getpid() and _argv_matches(args, tokens):
+            pids.append(int(pid))
+    return pids
 
 
 # NRMA health, for a card that has to be readable with nobody at the desk.
@@ -318,12 +376,16 @@ def nrma_recent(minutes: int = HEALTH_WINDOW_MIN) -> tuple[int, int]:
 
 
 def nrma_pools() -> list[tuple[str, float]]:
-    """Each proxy pool and the hours of breaker cooldown it has left."""
+    """Each pool an unattended relaunch may use, and its cooldown hours left.
+
+    Not direct: launch_free_pool.py never picks it, so "only direct is free"
+    means resting, not "a cron tick should have launched it".
+    """
     try:
-        from nrma_browser import PROXY_POOLS, pool_rest_hours
+        from nrma_browser import UNATTENDED_POOLS, pool_rest_hours
     except Exception:
         return []
-    return [(p, pool_rest_hours(p)) for p in PROXY_POOLS]
+    return [(p, pool_rest_hours(p)) for p in UNATTENDED_POOLS]
 
 
 def nrma_resting() -> bool:
@@ -438,26 +500,33 @@ def restart(script: str, cwd: str = None) -> bool:
 def kill_pattern(pattern: str, grace: float = 5.0) -> int:
     """SIGTERM every match, SIGKILL whatever outlives grace. Returns matches.
 
-    Counted before signalling: pgrep after the fact reports survivors, and the
-    alert needs to say how much was torn down.
+    Matches the way running() does — never `pkill -f`, which hits any command
+    line that merely mentions the script: on 2026-10-07 the re-enabled card's
+    first relaunch killed the shell that started it, and an editor with
+    building.py open would have gone the same way. Counted before signalling,
+    so the alert says how much was torn down.
     """
+    def alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+
+    found = _matching_pids(pattern)
     try:
-        found = subprocess.run(["pgrep", "-f", pattern],
-                               capture_output=True, text=True).stdout.split()
-        if not found:
-            return 0
-        subprocess.run(["pkill", "-TERM", "-f", pattern], capture_output=True)
+        for pid in found:
+            if alive(pid):
+                os.kill(pid, signal.SIGTERM)
         deadline = time.time() + grace
-        while time.time() < deadline:
-            if subprocess.run(["pgrep", "-f", pattern],
-                              capture_output=True).returncode != 0:
-                return len(found)
+        while time.time() < deadline and any(alive(p) for p in found):
             time.sleep(0.5)
-        subprocess.run(["pkill", "-KILL", "-f", pattern], capture_output=True)
-        return len(found)
+        for pid in found:
+            if alive(pid):
+                os.kill(pid, signal.SIGKILL)
     except Exception as e:
         print(f"[monitor] kill {pattern} failed: {e}")
-        return 0
+    return len(found)
 
 
 def recover(job: Job) -> tuple:
@@ -518,18 +587,47 @@ def build_message(persist: bool = True) -> str:
     recovered = set()
     grand_done = grand_total = 0
 
+    # Only what this period dropped: a product with no input is not part of
+    # the run. 202611 has no NRMA yet, and its empty jobs rendered 0/0 bars,
+    # two "✅ complete" lines and a red "nothing running" alert.
+    dropped = [j for j in JOBS if glob.glob(j.inp)]
+    # Kept but not collected here: a report-only job with no output yet. Every
+    # file a drop brings is stored (202611 keeps Youi Motor and RACV for
+    # safekeeping), so these get one neutral line — not a red "not running",
+    # not a share of the totals. Output appearing puts them back on the card.
+    staged = [j for j in dropped if j.script is None and not os.path.exists(j.outp)]
+    jobs = [j for j in dropped if j not in staged]
+
+    # A fan-out (Youi) is alive while its orchestrator or any runner is. A
+    # config whose runners have finished must not relaunch the group out from
+    # under the configs still collecting.
+    alive_of = {j.label: running(j.pattern) for j in jobs}
+    group_alive = {}
+    for j in jobs:
+        group_alive[j.group] = (group_alive.get(j.group, False) or alive_of[j.label]
+                                or running(j.kill_patterns[0]))
+
+    # Stats up front, because a job's stall reads its siblings': rows landing
+    # anywhere in a group mean that scraper is moving.
+    stats = {j.label: job_stats(j) for j in jobs}
+    group_age = {}
+    for j in jobs:
+        st = stats[j.label]
+        if st["age_min"] is not None:
+            group_age[j.group] = min(group_age.get(j.group, st["age_min"]), st["age_min"])
+
     # One block per insurer: its liveness heads the block, its products fill
     # it, its own subtotal closes it. Reading two competitors off one flat
     # list meant counting rows to work out where NRMA stopped and Youi began.
-    for insurer in dict.fromkeys(j.insurer for j in JOBS):
+    for insurer in dict.fromkeys(j.insurer for j in jobs):
         heads, rows, ins_alerts = [], [], []
         ins_done = ins_total = ins_remaining = 0
         ins_alive = False
 
-        for job in (j for j in JOBS if j.insurer == insurer):
+        for job in (j for j in jobs if j.insurer == insurer):
             label = job.label
-            s_ = job_stats(job)
-            alive = running(job.pattern)
+            s_ = stats[label]
+            alive = alive_of[label]
             ins_done += s_["done"]
             ins_total += s_["total"]
             # Retryable rows are real remaining work, so they justify a relaunch.
@@ -548,19 +646,21 @@ def build_message(persist: bool = True) -> str:
             if rec_ts and s_["age_min"] is not None:
                 s_["stall_age"] = min(s_["age_min"],
                                       (now.timestamp() - rec_ts) / 60)
+            # A sibling stage still writing rows: the scraper is moving, just on
+            # the other file (a main's leftover retries wait while its toggle
+            # stage runs). Not a wedge.
+            if s_["age_min"] is not None and job.group in group_age:
+                s_["stall_age"] = min(s_.get("stall_age", s_["age_min"]),
+                                      group_age[job.group])
 
             ins_alive = ins_alive or alive
             wedged = alive and stalled(s_, remaining)
             strikes = strike_count(prev.get(label), wedged)
             # Recovery needs an entry point and outstanding work to justify it.
             can_fix = bool(AUTOSTART and job.script and remaining)
-
-            # Buildings no longer waits on Contents: 202609 Contents shipped
-            # 2026-09-18, which was this deferral's stated exit condition, and
-            # Buildings' own 4 non-terminal rows are now wanted too. Kept as a
-            # dead False so the "⏸ holding" branch below stays reachable code
-            # if the next run needs the deferral back.
-            deferred = False
+            idle = not alive and not group_alive[job.group]
+            relaunch_done = (prev.get(label) or {}).get("relaunch_done")
+            held_until = hold_until(job.hold_h, prev.get(label) or {}, s_["done"])
 
             if can_fix and wedged and strikes >= WEDGE_TICKS:
                 # Alive but no new row for WEDGE_TICKS ticks: wedged, not slow.
@@ -568,29 +668,37 @@ def build_message(persist: bool = True) -> str:
                 # process is holding a dead session and must be killed first.
                 if job.group in recovered:
                     alive, wedged, strikes, rec_ts = True, False, 0, now.timestamp()
+                    relaunch_done = s_["done"]
                 else:
                     killed, ok = recover(job)
                     if ok:
                         recovered.add(job.group)
-                        rec_ts = now.timestamp()
+                        rec_ts, relaunch_done = now.timestamp(), s_["done"]
                         ins_alerts.append(
                             f"♻ *{label}* wedged {s_['age_min']:.0f}m — killed "
                             f"{killed} proc, relaunched `{job.script}`")
                         alive, wedged, strikes = True, False, 0
-            elif can_fix and not alive:
+            elif can_fix and idle and (job.group in recovered
+                                       or now.timestamp() >= held_until):
                 if job.group in recovered:
                     alive, strikes, rec_ts = True, 0, now.timestamp()
+                    relaunch_done = s_["done"]
                 elif recover(job)[1]:
                     recovered.add(job.group)
-                    rec_ts = now.timestamp()
-                    ins_alerts.append(f"♻ *{label}* was dead — relaunched `{job.script}`")
+                    rec_ts, relaunch_done = now.timestamp(), s_["done"]
+                    ins_alerts.append(
+                        f"♻ *{label}* was dead — relaunched `{job.script}`"
+                        if os.path.exists(job.outp)
+                        else f"▶ *{label}* started `{job.script}`")
                     alive, strikes = True, 0
-            elif deferred:
-                # Not a fault: an unexplained red line here would read as one.
+            elif can_fix and idle:
+                # Held, not dead: the last relaunch landed nothing. Saying when
+                # the next try is due beats a red line every tick until then.
                 ins_alerts.append(
-                    f"⏸ *{label}* holding {remaining} rows until Contents lands "
-                    f"— one reputation pool, Contents has the budget")
-            elif not alive and remaining:
+                    f"⏸ *{label}* {remaining} rows outstanding — last relaunch "
+                    f"landed none, next try after "
+                    f"{datetime.datetime.fromtimestamp(held_until):%a %H:%M}")
+            elif idle and remaining:
                 # A parked NRMA job is the breaker working, not a fault, and the
                 # health line already says so — a red alert here would cry wolf
                 # every two hours for the whole rest.
@@ -642,7 +750,8 @@ def build_message(persist: bool = True) -> str:
                 s_ = {**s_, "done": was_done}
             state[label] = {"done": s_["done"], "ts": now.timestamp(),
                             "clock": now.strftime("%H:%M"), "anchor": anchor,
-                            "wedged": strikes, "recovered_ts": rec_ts}
+                            "wedged": strikes, "recovered_ts": rec_ts,
+                            "relaunch_done": relaunch_done}
 
         grand_done += ins_done
         grand_total += ins_total
@@ -656,7 +765,7 @@ def build_message(persist: bool = True) -> str:
         # exactly what the collapsed line says once.
         if ins_total and not ins_remaining:
             out.append(f"✅ *{insurer}* complete — {ins_done}/{ins_total} · "
-                       + " · ".join(j.product.lower() for j in JOBS
+                       + " · ".join(j.product.lower() for j in jobs
                                     if j.insurer == insurer))
             continue
 
@@ -680,6 +789,39 @@ def build_message(persist: bool = True) -> str:
             save_state(state)
         except Exception as e:
             print(f"[monitor] state write failed: {e}")
+
+    # RACV collects on another box (2026-10-19), so its counts arrive by hand in
+    # RACV/outputs/<period>/remote_progress.json — {"as_of": "...", "rows":
+    # {label: [done, total]}} — and replace RACV's "stored only" line.
+    remote = os.path.join(RACV, "outputs", PERIOD, "remote_progress.json")
+    if os.path.exists(remote):
+        try:
+            with open(remote, encoding="utf-8") as fh:
+                rp = json.load(fh)
+            r_rows = [(k, int(d), int(t)) for k, (d, t) in rp["rows"].items()]
+        except Exception as e:
+            r_rows = []
+            alerts.append(f"⚠️ RACV remote counts unreadable: {e}")
+        if r_rows:
+            staged = [j for j in staged if j.insurer != "RACV"]
+            r_done, r_total = sum(r[1] for r in r_rows), sum(r[2] for r in r_rows)
+            grand_done += r_done
+            grand_total += r_total
+            r_pct = 100 * r_done / r_total if r_total else 0
+            if r_done >= r_total:
+                out.append(f"✅ *RACV* complete — {r_done}/{r_total} "
+                           f"(remote box, as of {rp.get('as_of', '?')})")
+            else:
+                out += [f"*RACV*   remote box · as of {rp.get('as_of', '?')}", "```",
+                        *(f"{k.upper():<{LBL}}{100 * d / t if t else 0:>5.1f}%  "
+                          f"{bar(100 * d / t if t else 0)}  {d}/{t}" for k, d, t in r_rows),
+                        "─" * (LBL + 39),
+                        f"{'RACV':<{LBL}}{r_pct:>5.1f}%  {bar(r_pct)}  {r_done}/{r_total}",
+                        "```"]
+
+    if staged:
+        out.append("⚪ stored only, not collecting: "
+                   + " · ".join(j.label.lower() for j in staged))
 
     overall = (100 * grand_done / grand_total) if grand_total else 0
     return "\n".join([
@@ -832,17 +974,35 @@ def _selftest():
     # Only the home pair rides run_youi.py; Motor is a separate entry point.
     youi = [j for j in JOBS if j.insurer == "Youi" and j.script == "run_youi.py"]
     assert len({j.group for j in youi}) == 1, "Youi home jobs must recover as one"
-    assert {j.product for j in youi} == {"Buildings", "Contents"}
+    assert {j.product for j in youi} == {"Buildings", "Contents", "Bldg toggle",
+                                         "Cont toggle", "Combined"}
     assert youi[0].kill_patterns[0] == "[r]un_youi.py", "orchestrator dies first"
+    assert all(len(j.product) <= LBL for j in JOBS), "a label overflows the column"
+    # A toggle runner must not read as its main config, or a finished main
+    # would look alive while only its toggle runs.
+    assert not _argv_matches(f"{py} {RUNNER} buildings_toggle", [RUNNER, "buildings"])
     # Report-only jobs must never be relaunched — no script, nothing to kill.
     for j in JOBS:
         if j.insurer == "RACV" or (j.insurer == "Youi" and j.product == "Motor"):
             assert j.script is None, f"{j.label} must stay report-only"
     # NRMA jobs recover independently and default to killing just themselves.
     nrma = [j for j in JOBS if j.insurer == "NRMA"]
-    assert len({j.group for j in nrma}) == len(nrma)
+    # Each toggle rides its scraper's group (one relaunch per tick); Combined is
+    # its own, relaunched independently, in parallel with the other two.
+    assert {j.group for j in nrma} == {"nrma-buildings", "nrma-contents", "nrma-combined"}
     assert all(j.kill_patterns == (j.pattern,) for j in nrma)
-    print(f"[monitor] selftest ok ({len(cases)} rows + ids + rate/stall/recovery)")
+
+    # Relaunch hold: only a relaunch that landed nothing starts one, any new
+    # row lifts it, and a job without hold_h (NRMA) relaunches every tick.
+    t = now.timestamp() - 3600
+    landed_none = {"recovered_ts": t, "relaunch_done": 5}
+    assert hold_until(24, landed_none, 5) == t + 24 * 3600
+    assert hold_until(24, landed_none, 6) == 0, "rows moved: no hold"
+    assert hold_until(0, landed_none, 5) == 0, "hold off"
+    assert hold_until(24, {}, 5) == 0, "never relaunched: no hold"
+    assert hold_until(24, {"recovered_ts": t}, 5) == 0, "pre-hold state never holds"
+    assert all(j.hold_h for j in youi) and not any(j.hold_h for j in nrma)
+    print(f"[monitor] selftest ok ({len(cases)} rows + ids + rate/stall/recovery/hold)")
 
 
 def main():

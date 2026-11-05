@@ -34,13 +34,18 @@ OUTPUTS = os.path.join(os.path.dirname(HERE), "outputs")
 def shipworthy(row: dict) -> bool:
     """Priced, or declined by the insurer for a reason about the property."""
     priced = (row.get("NRMA_YearlyPayment") or "").strip()
-    try:
-        if float(priced) > 0:
-            return True
-    except ValueError:
-        pass
     reason = (row.get("Reason_for_quote_failure") or "").strip()
-    return reason.startswith(TERMINAL_REASON_PREFIXES)
+    if reason.startswith(TERMINAL_REASON_PREFIXES):
+        return True
+    # A price with a failure reason is a quote that died part-way (2026-10-19:
+    # a toggle whose excess sweep failed after its base prices were in). The
+    # resume pass already retries it (_row_is_complete); it must not ship.
+    if reason and reason != "N/A":
+        return False
+    try:
+        return float(priced) > 0
+    except ValueError:
+        return False
 
 
 def filter_csv(src: str, dst: str) -> tuple:
@@ -75,10 +80,14 @@ def main() -> int:
     delivery = os.path.join(out, "delivery")
     os.makedirs(delivery, exist_ok=True)
 
+    # Every CSV the crawlers wrote: a quarterly run ships Combined and both
+    # toggles too (202608's zip had all five). Filtering on *_main.csv until
+    # 2026-10-19 would have shipped 202611 without three of its five files.
+    # Backups (*.csv.pre_*) do not end in .csv, so they never ship.
     names = sorted(f for f in os.listdir(out)
-                   if f.endswith("_main.csv") and only.casefold() in f.casefold())
+                   if f.endswith(".csv") and only.casefold() in f.casefold())
     if not names:
-        print(f"[delivery] no {only or ''}*_main.csv in {out}")
+        print(f"[delivery] no {only or ''}*.csv in {out}")
         return 1
     for name in names:
         kept, dropped = filter_csv(os.path.join(out, name), os.path.join(delivery, name))
@@ -107,6 +116,9 @@ def demo() -> None:
                            "AkamaiNotValidated: _abck never validated after 3 bootstrap attempts"})
     # a priced-as-zero row is not a quote, whatever the log said
     assert not shipworthy({"NRMA_YearlyPayment": "0", "Reason_for_quote_failure": ""})
+    # a price with a failure reason died part-way and must not ship
+    assert not shipworthy({"NRMA_YearlyPayment": "5050.15", "Reason_for_quote_failure":
+                           "ExcessSweepIncomplete: no price at [3000] of 12 offered tiers"})
     print("demo ok")
 
 

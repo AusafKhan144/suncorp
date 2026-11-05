@@ -23,7 +23,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from nrma_browser import PROXY_POOLS, pool_rest_hours  # noqa: E402
+from nrma_browser import UNATTENDED_POOLS, pool_rest_hours  # noqa: E402
 
 
 def main() -> int:
@@ -36,13 +36,15 @@ def main() -> int:
         return 2
 
     resting = []
-    for pool in PROXY_POOLS:
+    # Never direct: see UNATTENDED_POOLS (2026-10-07, 46h on the office IP).
+    for pool in UNATTENDED_POOLS:
         rest = pool_rest_hours(pool)
         if rest:
             resting.append(f"{pool} {rest:.1f}h")
             continue
         print(f"[launch] {os.path.basename(script)} on {pool}"
-              + (f" (resting: {', '.join(resting)})" if resting else ""))
+              + (f" (resting: {', '.join(resting)})" if resting else ""),
+              flush=True)  # execv below discards an unflushed buffer
         os.environ["NRMA_PROXY_PROVIDER"] = pool
         # Replaces this process, so argv keeps the scraper's name for pgrep.
         os.execv(sys.executable, [sys.executable, script])

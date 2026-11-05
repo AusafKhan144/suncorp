@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -27,11 +28,18 @@ import period  # noqa: E402
 CRAWLER_CONFIGS = [
     CrawlerConfig(
         crawler_type=crawler,
-        filename=period.stem("Youi", product),
+        filename=period.stem("Youi", product, kind),
         log_dir=HERE / "Youi" / "Logs" / period.PERIOD / f"{crawler}_log",
     )
-    for crawler, product in (("buildings", "Buildings"), ("contents", "Contents"))
-    if period.stem("Youi", product)
+    for crawler, product, kind in (
+        ("buildings", "Buildings", "main"),
+        ("contents", "Contents", "main"),
+        # Quarterly drops only; absent on a monthly run, so they drop out.
+        ("buildings_toggle", "Buildings", "toggle"),
+        ("contents_toggle", "Contents", "toggle"),
+        ("combined", "Combined", "main"),
+    )
+    if period.stem("Youi", product, kind)
 ]
 
 # Path to the runner script
@@ -44,6 +52,12 @@ TOTAL_CHUNKS = CHUNK_END - CHUNK_START + 1
 
 # Parallelization settings
 CHUNKS_PER_CONFIG = 10  # How many chunks to run simultaneously per config
+
+# Each runner opens a headless Chromium (~0.3-0.5 GB) the moment it starts, and
+# a quarterly run is 50 runners: 50 browsers in the same second is more memory
+# than this box has free. Chunk slot n waits n * this, so a config ramps up over
+# ~4.5 min and chunk 1 of every config (the sync chunk) still starts together.
+CHUNK_STAGGER_SECONDS = 30
 
 # Timeout settings
 CHUNK_TIMEOUT_SECONDS = 7200 + 7200 + 7200 # 2 hours per chunk
@@ -212,7 +226,8 @@ def parse_chunks(chunk_arg: str) -> list[int]:
 # ===== CORE EXECUTION FUNCTIONS =====
 def run_single_chunk(
     config: CrawlerConfig,
-    chunk_number: int
+    chunk_number: int,
+    start_delay: float = 0,
 ) -> tuple[bool, str, int]:
     """
     Run a single chunk for a specific crawler type
@@ -220,12 +235,14 @@ def run_single_chunk(
     Args:
         config: Crawler configuration
         chunk_number: Chunk number to process
+        start_delay: Seconds to wait first (see CHUNK_STAGGER_SECONDS)
 
     Returns:
         Tuple of (success, crawler_type, chunk_number)
     """
     log_file = config.log_dir / f"chunk_{chunk_number}.log"
 
+    time.sleep(start_delay)
     print(f"[{config.crawler_type}] ▶️  Starting chunk {chunk_number}")
 
     try:
@@ -307,9 +324,10 @@ def run_chunks_for_single_config(
             executor.submit(
                 run_single_chunk,
                 config,
-                chunk_number
+                chunk_number,
+                slot * CHUNK_STAGGER_SECONDS,
             ): chunk_number
-            for chunk_number in chunks
+            for slot, chunk_number in enumerate(chunks)
         }
 
         for future in as_completed(futures):

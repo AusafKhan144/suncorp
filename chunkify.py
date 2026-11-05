@@ -14,19 +14,27 @@ class ChunkConfig:
     """Configuration for synchronized chunk generation"""
     
     # Master input files (one per product type)
-    # Whatever Youi home CSVs this period actually dropped. A quarterly run that
-    # also ships toggle/combined files gets them by dropping them in — the names
-    # are read, not hardcoded, so nothing here needs editing per period.
+    # Whatever Youi home CSVs this period actually dropped: the two mains every
+    # run, plus the toggles and Combined only a quarterly drop carries. The
+    # names are read, not hardcoded, so nothing here needs editing per period.
     MASTER_FILES = {
-        f"{product.lower()}_main": period.input_csv("Youi", product)
-        for product in ("Buildings", "Contents")
-        if period.input_csv("Youi", product)
+        key: path for key, path in {
+            "buildings_main": period.input_csv("Youi", "Buildings"),
+            "contents_main": period.input_csv("Youi", "Contents"),
+            "buildings_toggle": period.input_csv("Youi", "Buildings", "toggle"),
+            "contents_toggle": period.input_csv("Youi", "Contents", "toggle"),
+            "combined": period.input_csv("Youi", "Combined"),
+        }.items() if path
     }
-    
+
     # Groups of files that should have matching sample codes in chunk 1
-    # No synchronized group this run — the toggle/combined files it referenced
-    # are not part of a monthly home run. Restore when a quarterly run needs it.
-    SYNCHRONIZED_GROUPS = []
+    # Quarterly only: samples shared by both toggles and Combined go in chunk 1
+    # of each (14 in 202608), so the three are quoted side by side. A monthly
+    # drop has none of the three, so there is no group.
+    _SYNC = ["buildings_toggle", "combined", "contents_toggle"]
+    SYNCHRONIZED_GROUPS = [
+        {"name": "home_insurance", "files": _SYNC, "sample_column": "SAMPLE_NUMBER"}
+    ] if set(_SYNC) <= set(MASTER_FILES) else []
     
     # Number of chunks to create
     NUM_CHUNKS = 10

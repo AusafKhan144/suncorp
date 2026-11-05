@@ -7,7 +7,6 @@ import base64
 import csv
 import json
 import logging
-import math
 import os
 import random
 import re
@@ -28,12 +27,15 @@ try:  # package import (python -m NRMA.home.building)
         COOLDOWN_FILE,
         cover_start_date,
         is_bot_block,
+        redact,
         quote_session,
         secret,
         short_failure_reason,
         start_cooldown,
+        sweep_call,
         TERMINAL_REASON_PREFIXES,
     )
+    from .si_steps import BUILDING_FIELDS as SI_FIELDS, SumInsuredOutOfRange, quote as quote_si
 except ImportError:  # direct script run
     from nrma_browser import (
         AkamaiNotValidated,
@@ -42,12 +44,15 @@ except ImportError:  # direct script run
         COOLDOWN_FILE,
         cover_start_date,
         is_bot_block,
+        redact,
         quote_session,
         secret,
         short_failure_reason,
         start_cooldown,
+        sweep_call,
         TERMINAL_REASON_PREFIXES,
     )
+    from si_steps import BUILDING_FIELDS as SI_FIELDS, SumInsuredOutOfRange, quote as quote_si
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -100,44 +105,6 @@ FORCE_RERUN = os.getenv("FORCE_RERUN", "0").strip().lower() in (
     "yes",
     "y",
 )
-
-# ---------------------------------------------------------------------------
-# Sum-insured retry tuning (mirrors NrmaHomeUnifiedExtractor in home.py)
-# ---------------------------------------------------------------------------
-SI_PER_LARGE_BEDROOM_BUILDING = 300_000  # +1 large bedroom ≈ +$300k upper bound
-MAX_LARGE_BEDROOM_ADDITIONS = 10
-MAX_SI_RETRIES = 1  # extra attempts after the first pass
-
-ROOM_OVERRIDE_KEYS = (
-    "SmallBedrooms",
-    "MediumBedrooms",
-    "LargeBedrooms",
-    "Bathrooms",
-    "LivingSpaces",
-    "DiningRooms",
-)
-OUTDOOR_OVERRIDE_KEYS = (
-    "ParkingSpacesCarport",
-    "ParkingSpacesGarage",
-    "InGroundPool",
-)
-
-
-def _apply_room_outdoor_overrides(
-    answers: dict,
-    room_overrides: Optional[dict] = None,
-    outdoor_overrides: Optional[dict] = None,
-) -> dict:
-    """Overlay SI-retry room/outdoor overrides onto an answers dict in place."""
-    if room_overrides:
-        for k in ROOM_OVERRIDE_KEYS:
-            if k in room_overrides:
-                answers[k] = room_overrides[k]
-    if outdoor_overrides:
-        for k in OUTDOOR_OVERRIDE_KEYS:
-            if k in outdoor_overrides:
-                answers[k] = outdoor_overrides[k]
-    return answers
 
 
 # ---------------------------------------------------------------------------
@@ -387,9 +354,7 @@ class QuoteResult:
     excess_prices: dict = field(default_factory=dict)
     excess_plus_prices: dict = field(default_factory=dict)
     failure_reason: str = ""
-    rerun_small_bedrooms: str = ""
-    rerun_large_bedrooms: str = ""
-    rerun_carport: str = ""
+    rerun: dict = field(default_factory=dict)  # lookup column -> value, see si_steps.py
 
 
 # ---------------------------------------------------------------------------
@@ -642,8 +607,7 @@ class NRMAClient:
         self.customer_token = None  # x-iag-customer (Okta JWT)
         self.auth_session_token = None  # x-iag-auth-session JWT
         self.cookies: dict = {}  # full cookie jar
-        self.room_overrides: Optional[dict] = None  # set during SI retry
-        self.outdoor_overrides: Optional[dict] = None  # set during SI retry
+        self.si_overrides: Optional[dict] = None  # answers a sum-insured re-quote changes
 
     # ── Cookie management ─────────────────────────────────────────────
 
@@ -1074,9 +1038,7 @@ class NRMAClient:
             "ClaimsMade": profile.claims_5yrs,
         }
 
-        _apply_room_outdoor_overrides(
-            answers, self.room_overrides, self.outdoor_overrides
-        )
+        answers.update(self.si_overrides or {})
 
         if include_parties:
             party: dict = {
@@ -1166,9 +1128,7 @@ class NRMAClient:
                 "SumInsuredHomeCustomAmount": str(profile.buildings_sum_insured),
             },
         }
-        _apply_room_outdoor_overrides(
-            json_data["answers"], self.room_overrides, self.outdoor_overrides
-        )
+        json_data["answers"].update(self.si_overrides or {})
         return await self._post(
             f"{BASE_URL}/domain/question/api/question/api/2.x.x"
             f"/home/quote/{self.quote_id}",
@@ -1540,21 +1500,6 @@ def _check_excess_sweep_consistency(result: "QuoteResult", profile: "Profile") -
             pass
 
 
-class SumInsuredOutOfRange(ValueError):
-    """Raised when the target sum insured is outside the API's accepted range."""
-
-    def __init__(self, si_type, target, minimum, maximum, direction):
-        self.si_type = si_type
-        self.target = target
-        self.minimum = minimum
-        self.maximum = maximum
-        self.direction = direction
-        super().__init__(
-            f"SumInsuredOutOfRange|{si_type}|{direction}|"
-            f"target={target}|min={minimum}|max={maximum}"
-        )
-
-
 def _validate_sum_insured(profile: Profile, resp: dict):
     """Check the building sum insured against the API's calculated range.
 
@@ -1579,101 +1524,6 @@ def _validate_sum_insured(profile: Profile, resp: dict):
         raise SumInsuredOutOfRange(
             "building", building_sum, sum_insured_min, sum_insured_max, "high"
         )
-
-
-# ── Room/outdoor adjustment strategies (mirror home.py) ────────────────────
-
-
-def _rooms_for_too_low(target_si: int) -> tuple[dict, dict]:
-    """Minimise rooms + zero garage/carport/pool to push the range lower.
-
-    SI <  $50k:  1 small bed, 1 bath, rest = 0
-    SI >= $50k:  1 small bed, 1 bath, 1 living, rest = 0
-    """
-    if target_si < 50000:
-        log.info(
-            "│  Strategy (SI < $50k, too low): "
-            "1 small bed, 1 bath, rest=0, garage/carport=0"
-        )
-        rooms = {
-            "SmallBedrooms": "1",
-            "MediumBedrooms": "0",
-            "LargeBedrooms": "0",
-            "Bathrooms": "1",
-            "LivingSpaces": "0",
-            "DiningRooms": "0",
-        }
-    else:
-        log.info(
-            "│  Strategy (SI >= $50k, too low): "
-            "1 small bed, 1 bath, 1 living, rest=0, garage/carport=0"
-        )
-        rooms = {
-            "SmallBedrooms": "1",
-            "MediumBedrooms": "0",
-            "LargeBedrooms": "0",
-            "Bathrooms": "1",
-            "LivingSpaces": "1",
-            "DiningRooms": "0",
-        }
-    outdoor = {
-        "ParkingSpacesCarport": "0",
-        "ParkingSpacesGarage": "0",
-        "InGroundPool": False,
-    }
-    return rooms, outdoor
-
-
-def _rooms_for_too_high(
-    profile: Profile, target: int, maximum: int
-) -> tuple[dict, dict]:
-    """Keep existing rooms, add large bedrooms to lift the upper bound.
-
-    Building: +1 large bedroom ≈ +$300,000 to the upper bound.
-    """
-    difference = max(target - maximum, 0)
-    rate = SI_PER_LARGE_BEDROOM_BUILDING
-    additions = math.ceil(difference / rate) if rate > 0 else 1
-    additions = max(1, min(additions, MAX_LARGE_BEDROOM_ADDITIONS))
-
-    new_large = profile.large_bedrooms + additions
-    log.info(
-        f"│  Strategy (too high): difference=${difference:,}, "
-        f"rate=${rate:,}/bedroom, adding {additions} large bedrooms "
-        f"({profile.large_bedrooms} → {new_large})"
-    )
-
-    rooms = {
-        "SmallBedrooms": str(profile.small_bedrooms),
-        "MediumBedrooms": str(profile.medium_bedrooms),
-        "LargeBedrooms": str(new_large),
-        "Bathrooms": str(profile.bathrooms),
-        "LivingSpaces": "1",
-        "DiningRooms": "1",
-    }
-    return rooms, {}
-
-
-def _calculate_si_adjustment(
-    profile: Profile, exc: SumInsuredOutOfRange
-) -> tuple[dict, dict]:
-    """Pick the room/outdoor override for an out-of-range error."""
-    if exc.direction == "low":
-        return _rooms_for_too_low(exc.target)
-    return _rooms_for_too_high(profile, exc.target, exc.maximum)
-
-
-def _populate_rerun_columns(
-    result: "QuoteResult",
-    room_overrides: Optional[dict],
-    outdoor_overrides: Optional[dict],
-):
-    """Record the adjusted room/outdoor values in the rerun output columns."""
-    if room_overrides:
-        result.rerun_small_bedrooms = str(room_overrides.get("SmallBedrooms", ""))
-        result.rerun_large_bedrooms = str(room_overrides.get("LargeBedrooms", ""))
-    if outdoor_overrides:
-        result.rerun_carport = str(outdoor_overrides.get("ParkingSpacesCarport", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -1735,8 +1585,7 @@ async def _run_quote_attempt(
     session,
     mode: str,
     result: QuoteResult,
-    room_overrides: Optional[dict],
-    outdoor_overrides: Optional[dict],
+    overrides: Optional[dict],
 ):
     """Run one full quote pass.
 
@@ -1744,8 +1593,7 @@ async def _run_quote_attempt(
     caller can adjust rooms and retry; other failures propagate as-is.
     """
     client = NRMAClient(session)
-    client.room_overrides = room_overrides
-    client.outdoor_overrides = outdoor_overrides
+    client.si_overrides = overrides
 
     await client.step1_bootstrap(state=profile.state or "NSW")
     await client.step2_validate_entitlements()
@@ -1862,65 +1710,42 @@ async def run_profile(
         profile.occupancy_type,
     )
 
-    room_overrides: Optional[dict] = None
-    outdoor_overrides: Optional[dict] = None
-
-    # Attempt 1 = CSV values; each SI-out-of-range failure adjusts rooms
-    # and re-runs a fresh quote, up to MAX_SI_RETRIES extra attempts.
-    # ponytail: the SI retry reuses this session, and Akamai tends to flag the
-    # exit IP after one completed quote — so a retry can hit "Access Denied"
-    # and the row is left for the next resume. Give the retry its own
-    # quote_session if that turns out to cost a meaningful share of rows.
-    for attempt in range(1, MAX_SI_RETRIES + 2):
-        try:
-            await _run_quote_attempt(
-                profile, session, mode, result, room_overrides, outdoor_overrides
-            )
-            _populate_rerun_columns(result, room_overrides, outdoor_overrides)
-            log.info(
-                "✅ profile=%s mode=%s done (attempt %d) | "
-                "NRMA yearly=%s monthly=%s (excess %s) | "
-                "NRMAPlus yearly=%s monthly=%s (excess %s) | AD=%s Fusion=%s",
-                profile.sample_number,
-                mode,
-                attempt,
-                result.nrma_yearly or "-",
-                result.nrma_monthly or "-",
-                result.nrma_default_excess or "-",
-                result.nrma_plus_yearly or "-",
-                result.nrma_plus_monthly or "-",
-                result.nrma_plus_default_excess or "-",
-                result.nrma_accidental_damage or "-",
-                result.nrma_fusion or "-",
-            )
-            _check_output_integrity(result, profile)
-            return result
-
-        except SumInsuredOutOfRange as exc:
-            if attempt > MAX_SI_RETRIES:
-                _populate_rerun_columns(result, room_overrides, outdoor_overrides)
-                result.failure_reason = str(exc)[:500]
-                log.error(
-                    "❌ profile=%s SI out of range after %d attempts: %s",
-                    profile.sample_number,
-                    attempt,
-                    exc,
-                )
-                _check_output_integrity(result, profile)
-                return result
-
-            room_overrides, outdoor_overrides = _calculate_si_adjustment(profile, exc)
-            log.info(
-                "⚠ profile=%s SI %s — retrying with adjusted rooms",
-                profile.sample_number,
-                exc.direction,
-            )
-
-        except Exception as exc:
-            result.failure_reason = str(exc)[:500]
-            log.error("❌ profile=%s FAILED: %s", profile.sample_number, exc)
-            _check_output_integrity(result, profile)
-            return result
+    # Attempt 1 = CSV values; out of range, si_steps re-quotes Suncorp's way.
+    # ponytail: re-quotes reuse this session, and Akamai tends to flag the exit
+    # IP after one completed quote. Out-of-range steps stop at step 8, so only
+    # the priced one completes; give re-quotes their own quote_session if
+    # "Access Denied" starts costing rows.
+    try:
+        await quote_si(
+            lambda overrides: _run_quote_attempt(
+                profile, session, mode, result, overrides
+            ),
+            profile,
+            result,
+            SI_FIELDS,
+        )
+        log.info(
+            "✅ profile=%s mode=%s done (rerun %s) | "
+            "NRMA yearly=%s monthly=%s (excess %s) | "
+            "NRMAPlus yearly=%s monthly=%s (excess %s) | AD=%s Fusion=%s",
+            profile.sample_number,
+            mode,
+            result.rerun or "-",
+            result.nrma_yearly or "-",
+            result.nrma_monthly or "-",
+            result.nrma_default_excess or "-",
+            result.nrma_plus_yearly or "-",
+            result.nrma_plus_monthly or "-",
+            result.nrma_plus_default_excess or "-",
+            result.nrma_accidental_damage or "-",
+            result.nrma_fusion or "-",
+        )
+    except SumInsuredOutOfRange as exc:  # the range for the home as described
+        result.failure_reason = str(exc)[:500]
+        log.error("❌ profile=%s SI out of range: %s", profile.sample_number, exc)
+    except Exception as exc:
+        result.failure_reason = str(exc)[:500]
+        log.error("❌ profile=%s FAILED: %s", profile.sample_number, exc)
 
     _check_output_integrity(result, profile)
     return result
@@ -2124,42 +1949,22 @@ async def _collect_toggle(
         excess_tiers,
     )
     for excess_val in excess_tiers:
-        try:
-            r_std = await client.get_price(
-                profile,
-                address_obj,
-                asset_id,
-                building_id,
-                party_id,
-                level_of_cover="STANDARD",
-                billing_freq="ANNUALLY",
-                excess=excess_val,
-            )
-            std_price = _extract_price(r_std, "STANDARD", "ANNUALLY")
-            if std_price:
-                result.excess_prices[excess_val] = std_price
-
-            r_plus = await client.get_price(
-                profile,
-                address_obj,
-                asset_id,
-                building_id,
-                party_id,
-                level_of_cover="PLUS",
-                billing_freq="ANNUALLY",
-                excess=excess_val,
-            )
-            plus_price = _extract_price(r_plus, "PLUS", "ANNUALLY")
-            if plus_price:
-                result.excess_plus_prices[excess_val] = plus_price
-
-        except Exception as exc:
-            log.info(
-                "Excess %s unavailable profile=%s: %s",
-                excess_val,
-                profile.sample_number,
-                exc,
-            )
+        for level, prices in (("STANDARD", result.excess_prices),
+                              ("PLUS", result.excess_plus_prices)):
+            resp = await sweep_call(lambda: client.get_price(
+                profile, address_obj, asset_id, building_id, party_id,
+                level_of_cover=level, billing_freq="ANNUALLY", excess=excess_val,
+            ))
+            price = _extract_price(resp, level, "ANNUALLY")
+            if price:
+                prices[excess_val] = price
+    # 202608: every priced toggle row carries both prices at every offered tier.
+    holes = [x for x in excess_tiers
+             if x not in result.excess_prices or x not in result.excess_plus_prices]
+    if holes:
+        raise RuntimeError(
+            f"ExcessSweepIncomplete: no price at {holes} of {len(excess_tiers)} offered tiers"
+        )
 
     _check_frequency_consistency(result, profile)
     _check_optional_cover_pricing(result, profile)
@@ -2169,15 +1974,17 @@ async def _collect_toggle(
 # ---------------------------------------------------------------------------
 # Output
 # ---------------------------------------------------------------------------
+# Column names and order are the client's delivery template (Suncorp, 2026-10-22),
+# plus a Rerun_ column per lookup Yes field after the template's three (Suncorp,
+# 2026-10-29). test_template_columns.py pins both to the period's files.
 MAIN_FIELDS = [
     "Sample_Number",
-    "Substate",
     "DOB_DD",
     "DOB_MM",
     "DOB_YYYY",
     "Postcode",
     "QuoteDate",
-    "Timestamp",
+    "Timestamp (in hh:mm)",
     "QuoteLink",
     "QuoteNumber",
     "NRMA_DefaultExcess",
@@ -2185,10 +1992,7 @@ MAIN_FIELDS = [
     "NRMAPlus_DefaultExcess",
     "NRMAPlus_YearlyPayment",
     "Reason_for_quote_failure",
-    "Rerun_Small_Bedrooms",
-    "Rerun_Large_Bedrooms",
-    "Rerun_Carport",
-]
+] + [f"Rerun_{f}" for f in SI_FIELDS]
 
 TOGGLE_FIELDS = (
     [
@@ -2199,7 +2003,7 @@ TOGGLE_FIELDS = (
         "DOB_YYYY",
         "Postcode",
         "QuoteDate",
-        "Timestamp",
+        "Timestamp (in hh:mm)",
         "QuoteLink",
         "QuoteNumber",
         "NRMA_DefaultExcess",
@@ -2209,6 +2013,9 @@ TOGGLE_FIELDS = (
         "NRMA_YearlyPayment",
         "NRMA_AccidentalDamage",
         "NRMA_Fusion",
+    ]
+    + [f"NRMA_excess_{x}" for x in ALL_EXCESS_LEVELS]
+    + [
         "NRMAPlus_DefaultExcess",
         "NRMAPlus_FortnightlyPayment",
         "NRMAPlus_QuarterlyPayment",
@@ -2217,27 +2024,21 @@ TOGGLE_FIELDS = (
         "NRMAPlus_AccidentalDamage",
         "NRMAPlus_Fusion",
     ]
-    + [f"NRMA_excess_{x}" for x in ALL_EXCESS_LEVELS]
     + [f"NRMAPlus_excess_{x}" for x in ALL_EXCESS_LEVELS]
-    + [
-        "Reason_for_quote_failure",
-        "Rerun_Small_Bedrooms",
-        "Rerun_Large_Bedrooms",
-        "Rerun_Carport",
-    ]
+    + ["Reason_for_quote_failure"]
+    + [f"Rerun_{f}" for f in SI_FIELDS]
 )
 
 
 def to_main_row(r: QuoteResult) -> dict:
     return {
         "Sample_Number": r.sample_number,
-        "Substate": r.substate,
         "DOB_DD": r.dob_dd,
         "DOB_MM": r.dob_mm,
         "DOB_YYYY": r.dob_yyyy,
         "Postcode": r.postcode,
         "QuoteDate": r.quote_date,
-        "Timestamp": r.timestamp,
+        "Timestamp (in hh:mm)": r.timestamp,
         "QuoteLink": r.quote_link,
         "QuoteNumber": r.quote_number,
         "NRMA_DefaultExcess": r.nrma_default_excess,
@@ -2245,9 +2046,7 @@ def to_main_row(r: QuoteResult) -> dict:
         "NRMAPlus_DefaultExcess": r.nrma_plus_default_excess,
         "NRMAPlus_YearlyPayment": r.nrma_plus_yearly,
         "Reason_for_quote_failure": short_failure_reason(r.failure_reason),
-        "Rerun_Small_Bedrooms": r.rerun_small_bedrooms,
-        "Rerun_Large_Bedrooms": r.rerun_large_bedrooms,
-        "Rerun_Carport": r.rerun_carport,
+        **{f"Rerun_{f}": r.rerun.get(f, "") for f in SI_FIELDS},
     }
 
 
@@ -2260,7 +2059,7 @@ def to_toggle_row(r: QuoteResult) -> dict:
         "DOB_YYYY": r.dob_yyyy,
         "Postcode": r.postcode,
         "QuoteDate": r.quote_date,
-        "Timestamp": r.timestamp,
+        "Timestamp (in hh:mm)": r.timestamp,
         "QuoteLink": r.quote_link,
         "QuoteNumber": r.quote_number,
         "NRMA_DefaultExcess": r.nrma_default_excess,
@@ -2278,9 +2077,7 @@ def to_toggle_row(r: QuoteResult) -> dict:
         "NRMAPlus_AccidentalDamage": r.nrma_plus_accidental_damage,
         "NRMAPlus_Fusion": r.nrma_plus_fusion,
         "Reason_for_quote_failure": short_failure_reason(r.failure_reason),
-        "Rerun_Small_Bedrooms": r.rerun_small_bedrooms,
-        "Rerun_Large_Bedrooms": r.rerun_large_bedrooms,
-        "Rerun_Carport": r.rerun_carport,
+        **{f"Rerun_{f}": r.rerun.get(f, "") for f in SI_FIELDS},
     }
     for x in ALL_EXCESS_LEVELS:
         row[f"NRMA_excess_{x}"] = r.excess_prices.get(x, "")
@@ -2372,6 +2169,10 @@ RATE_LIMIT_BACKOFF = (
 START_JITTER_SECONDS = float(os.getenv("START_JITTER_SECONDS", "20"))
 # Seconds to wait before each profile. See the throttle note in worker().
 PROFILE_DELAY = float(os.getenv("NRMA_PROFILE_DELAY", "0"))
+# main | toggle | all. One stage alone lets main and toggle run as two
+# processes in parallel (2026-10-19 deadline crunch); each writes only its own
+# CSV. Never run two processes on the same stage: both would work one queue.
+STAGE = os.getenv("NRMA_STAGE", "all").strip().lower()
 
 # Refusals that need *time* to clear rather than just a fresh exit IP. 429 and
 # DynaCop are an explicit throttle; a 403 bot block earns the same wait.
@@ -2446,9 +2247,9 @@ async def _run_one_session(profile: Profile, mode: str) -> QuoteResult:
         return result
     except Exception as exc:  # browser launch / navigation failure
         result = _new_result(profile)
-        result.failure_reason = f"BrowserSessionFailed: {exc}"[:500]
+        result.failure_reason = f"BrowserSessionFailed: {redact(exc)}"[:500]
         log.error(
-            "❌ profile=%s browser session failed: %s", profile.sample_number, exc
+            "❌ profile=%s browser session failed: %s", profile.sample_number, redact(exc)
         )
         return result
 
@@ -2598,35 +2399,7 @@ async def main():
 
     sem = asyncio.Semaphore(CONCURRENCY)
 
-    # toggle_profiles = load_profiles(INPUT_TOGGLE_CSV)
-
-    # # ── Idempotent resume: skip samples already collected properly ──────
-    # if FORCE_RERUN:
-    #     done, keep = set(), []
-    #     log.info("FORCE_RERUN set — ignoring existing output, scraping all")
-    # else:
-    #     done, keep = load_completed(OUTPUT_TOGGLE_CSV)
-    # pending = [p for p in toggle_profiles if p.sample_number not in done]
-    # log.info(
-    #     "Toggle resume: %d already collected, %d pending of %d total",
-    #     len(done),
-    #     len(pending),
-    #     len(toggle_profiles),
-    # )
-
-    # # Rewrite output with prior good rows preserved; new results append.
-    # main_writer = CSVWriter(OUTPUT_TOGGLE_CSV, TOGGLE_FIELDS, preserve_rows=keep)
-
-    # if pending:
-    #     prog_main = {"done": 0, "total": len(pending)}
-    #     await asyncio.gather(*[
-    #         worker(p, main_writer, "toggle", sem, prog_main)
-    #         for p in pending
-    #     ])
-    # log.info("Toggle done → %s", OUTPUT_TOGGLE_CSV)
-
-    # NOTE: still capped at one profile — drop the [:1] for a real run.
-    main_profiles = load_profiles(INPUT_MAIN_CSV)
+    main_profiles = [] if STAGE == "toggle" else load_profiles(INPUT_MAIN_CSV)
 
     # ── Idempotent resume: skip samples already collected properly ──────
     if FORCE_RERUN:
@@ -2635,6 +2408,10 @@ async def main():
     else:
         done, keep = load_completed(OUTPUT_MAIN_CSV)
     pending = [p for p in main_profiles if p.sample_number not in done]
+    # Input order puts the samples that failed last pass at the head of every
+    # resume; ten of those in a row trip the breaker before a fresh sample is
+    # tried (the 2026-10-16 stall). Shuffled, they are spread through the run.
+    random.shuffle(pending)
     log.info(
         "MAIN resume: %d already collected, %d pending of %d total",
         len(done),
@@ -2643,7 +2420,8 @@ async def main():
     )
 
     # Rewrite output with prior good rows preserved; new results append.
-    main_writer = CSVWriter(OUTPUT_MAIN_CSV, MAIN_FIELDS, preserve_rows=keep)
+    # A toggle-only process must not rewrite the main CSV its sibling appends to.
+    main_writer = None if STAGE == "toggle" else CSVWriter(OUTPUT_MAIN_CSV, MAIN_FIELDS, preserve_rows=keep)
 
     if pending:
         prog_main = {"done": 0, "total": len(pending)}
@@ -2652,7 +2430,45 @@ async def main():
             for p in pending
         ])
     log.info("MAIN done → %s", OUTPUT_MAIN_CSV)
+    if STAGE == "main":
+        return
 
+    # Toggle files ship only with a quarterly drop. Nothing to do on a monthly
+    # run — and silently reusing the previous period's file is worse than
+    # nothing, because its output gets rewritten by every resume pass. Same
+    # stage as contents.py; it was commented out for the monthly 202609 run.
+    if not INPUT_TOGGLE_CSV or not os.path.exists(INPUT_TOGGLE_CSV):
+        log.info("No Buildings toggle input for %s — skipping the toggle stage",
+                 period.PERIOD or "?")
+        return
+
+    toggle_profiles = load_profiles(INPUT_TOGGLE_CSV)
+
+    # ── Idempotent resume: skip samples already collected properly ──────
+    if FORCE_RERUN:
+        done, keep = set(), []
+        log.info("FORCE_RERUN set — ignoring existing output, scraping all")
+    else:
+        done, keep = load_completed(OUTPUT_TOGGLE_CSV)
+    pending = [p for p in toggle_profiles if p.sample_number not in done]
+    random.shuffle(pending)
+    log.info(
+        "Toggle resume: %d already collected, %d pending of %d total",
+        len(done),
+        len(pending),
+        len(toggle_profiles),
+    )
+
+    # Rewrite output with prior good rows preserved; new results append.
+    toggle_writer = CSVWriter(OUTPUT_TOGGLE_CSV, TOGGLE_FIELDS, preserve_rows=keep)
+
+    if pending:
+        prog_toggle = {"done": 0, "total": len(pending)}
+        await asyncio.gather(*[
+            worker(p, toggle_writer, "toggle", sem, prog_toggle)
+            for p in pending
+        ])
+    log.info("Toggle done → %s", OUTPUT_TOGGLE_CSV)
 
 
 if __name__ == "__main__":

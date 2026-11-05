@@ -98,7 +98,6 @@ for noise in (
     "BrowserSessionFailed: Page.goto: NS_ERROR_NET_TIMEOUT",
     "BrowserSessionFailed: Page.goto: NS_ERROR_PROXY_CONNECTION_REFUSED",
     "Page.evaluate: NetworkError when attempting to fetch resource.",
-    "AkamaiNotValidated: _abck never validated after 3 bootstrap attempts",
 ):
     building._block_streak = 3
     building._note_outcome(_R(noise))
@@ -113,8 +112,75 @@ for i in range(5):
 assert building._halt.is_set(), "flaky exits must not defuse a real wall"
 assert nb.cooldown_hours_left() > 0, "breaker must park the account, not just stop"
 
+# A profile Akamai never validated (3 sessions x 3 bootstraps, all bot-flagged)
+# IS a wall: 2026-10-07 the office IP failed every bootstrap for 46h and the
+# breaker, treating it as noise, never tripped. It counts up — and still never
+# resets the streak.
+assert nb.is_bot_block("AkamaiNotValidated: _abck never validated after 3 bootstrap attempts")
+os.remove(nb.COOLDOWN_FILE)
+building._halt.clear()
+building._block_streak = 0
+for i in range(nb.BLOCK_STREAK_LIMIT):
+    building._note_outcome(_R("AkamaiNotValidated: _abck never validated after 3 bootstrap attempts"))
+assert building._halt.is_set(), "a run of never-validated sessions must trip the breaker"
+
+# An unattended relaunch must never fall through to the office IP.
+assert "direct" in nb.PROXY_POOLS and "direct" not in nb.UNATTENDED_POOLS
+# An unconfigured mobile pool does not exist; a configured one is tried first.
+assert ("mobile" in nb.UNATTENDED_POOLS) == bool(nb.MOBILE_PROXY_URL)
+assert nb.PROXY_POOLS[0] == "mobile"
+saved = nb.MOBILE_PROXY_URL, nb.PROXY_PROVIDER
+nb.MOBILE_PROXY_URL = "http://customer-u-cc-au-sessid-{session}:p%40ss@mob.example:7777"
+nb.PROXY_PROVIDER = "mobile"
+assert nb._proxy_config("ab12") == {
+    "server": "http://mob.example:7777",
+    "username": "customer-u-cc-au-sessid-ab12",
+    "password": "p@ss",
+}
+# A "-cc" pool is the same plan in another country; no suffix stays AU.
+nb.PROXY_PROVIDER = "iproyal-gb"
+assert "_country-gb_" in nb._proxy_config("ab12")["password"]
+nb.PROXY_PROVIDER = "oxylabs-us"
+assert "-cc-us-sessid-ab12" in nb._proxy_config("ab12")["username"]
+nb.PROXY_PROVIDER = "iproyal"
+assert f"_country-{nb.OXY_COUNTRY}_" in nb._proxy_config("ab12")["password"]
+assert nb.cooldown_file("iproyal-gb") != nb.cooldown_file("iproyal")
+nb.MOBILE_PROXY_URL, nb.PROXY_PROVIDER = saved
+
+# Proxy credentials never reach the log or the CSV (2026-10-13: 80k log lines).
+leak = "Failed to connect to proxy: http://customer-x-sessid-ab12:s3cr3t@pr.oxylabs.io:7777"
+assert nb.redact(leak) == "Failed to connect to proxy: http://<redacted>@pr.oxylabs.io:7777"
+assert "s3cr3t" not in nb.redact(leak)
+assert nb.redact("POST home/quote/X → 403") == "POST home/quote/X → 403"  # untouched
+
 # ── The parked account is what makes the halt survive a cron relaunch ───────
 assert 5.9 < nb.cooldown_hours_left() <= 6.0, "default back-off is 6h"
 
 os.remove(nb.COOLDOWN_FILE)
 print("ok — 403 backoff, breaker streak, and cooldown all behave")
+
+# The excess sweep rides out DynaCop 429s; anything else, or an endless 429,
+# propagates so a toggle row with a hole in its ladder fails instead of shipping.
+import asyncio
+import contents
+nb.SWEEP_PAUSE, nb.SWEEP_429_WAITS = (0, 0), (0, 0)
+calls = []
+async def _flaky():
+    calls.append(1)
+    if len(calls) < 3:
+        raise RuntimeError('PUT x/price → 429: {"message":"SIMPLE: DynaCop blocked request"}')
+    return {"ok": 1}
+assert asyncio.run(nb.sweep_call(_flaky)) == {"ok": 1} and len(calls) == 3
+for err in ("PUT x/price → 403: Access Denied", "PUT x/price → 429: DynaCop"):
+    async def _fails(err=err):
+        raise RuntimeError(err)
+    try:
+        asyncio.run(nb.sweep_call(_fails))
+        raise AssertionError(f"must propagate: {err}")
+    except RuntimeError as exc:
+        assert str(exc) == err
+# Contents sweeps the tiers its own response offers, not the 102-step grid.
+assert contents._available_excess_tiers(
+    {"conditions": {"Contents": {"BaseExcess": ["500", "300", 10000]}}}) == [300, 500, 10000]
+assert contents._available_excess_tiers({}) == list(contents.DEFAULT_CONTENTS_EXCESS_TIERS)
+print("sweep checks ok")
